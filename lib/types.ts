@@ -69,6 +69,9 @@ export interface CrossSell {
   title: string;
   when_rule: 'checkout_day' | 'during_stay' | 'same_day';
   condition: string | null;
+  offer_name: string;
+  offer_color: string | null;
+  offer_type: BookingType;
 }
 
 export interface Pet {

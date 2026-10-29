@@ -4,6 +4,7 @@ import { BookingError, quote } from './booking';
 import { enqueue, sendDue } from './notify';
 import { imageType, putFile } from './storage';
 import { todayTH } from './thaidate';
+import { canSee, type StaffUser } from './staff';
 import type { CartItem, OrderView } from './types';
 
 // แปลง error จากฐานข้อมูลเป็นข้อความที่ลูกค้าอ่านเข้าใจ
@@ -59,6 +60,7 @@ export async function createOrder(customer: string, items: CartItem[], acceptedP
         codes.push(bk);
       }
       await enqueue(tx, { order: code, channel: 'email', template: 'new_booking' });
+      if (free) for (const bk of codes) await enqueue(tx, { booking: bk, channel: 'calendar', template: 'confirm' });
       return { order: code as string, bookings: codes, due_now: q.due_now, total: q.total, paid: free };
     });
   } catch (e) {
@@ -119,7 +121,8 @@ export async function attachSlip(customer: string, code: string, file: Buffer) {
 }
 
 // ---------- พนักงานตรวจสลิป ----------
-export async function reviewPayment(staff: string, payment: string, action: 'approve' | 'reject', amountSlip: number | null, reason: string | null) {
+export async function reviewPayment(staffUser: StaffUser, payment: string, action: 'approve' | 'reject', amountSlip: number | null, reason: string | null) {
+  const staff = staffUser.code;
   const remindH = Number(await setting('remind_hours_before', '24')) || 24;
   const hold = Number(await setting('hold_minutes', '30')) || 30;
   const pushIds: number[] = [];
@@ -128,6 +131,8 @@ export async function reviewPayment(staff: string, payment: string, action: 'app
                          where p.code = ${payment} for update of p, o`;
     if (!p) throw new BookingError('not_found', 'ไม่พบสลิปนี้');
     if (p.status !== 'pending') throw new BookingError('done', 'สลิปนี้ตรวจไปแล้ว');
+    const biz = await tx`select distinct business_code from bookings where order_code = ${p.order_code}`;
+    if (!biz.some((b) => canSee(staffUser, b.business_code))) throw new BookingError('forbidden', 'ไม่มีสิทธิ์ตรวจสลิปของธุรกิจนี้');
     if (action === 'approve') {
       await tx`update payments set status = 'approved', amount_slip = ${amountSlip ?? p.amount_due}, reviewed_by = ${staff}, reviewed_at = now()
                where code = ${payment}`;
@@ -150,5 +155,44 @@ export async function reviewPayment(staff: string, payment: string, action: 'app
     }
   });
   // ส่ง LINE ทันที ถ้าพลาด รอบตั้งเวลาจะลองใหม่
-  if (process.env.LINE_CHANNEL_ACCESS_TOKEN) for (const id of pushIds) await sendDue(1, id).catch(() => undefined);
+  for (const id of pushIds) await sendDue(1, id).catch(() => undefined);
+}
+
+// ---------- งานหน้าร้าน: เช็กอิน · เริ่มทำ · เสร็จ · ไม่มา · ยกเลิก ----------
+const FLOW: Record<string, Record<string, [string[], string]>> = {
+  stay:    { check_in: [['confirmed'], 'checked_in'], check_out: [['checked_in'], 'done'] },
+  session: { attend: [['confirmed'], 'done'] },
+  slot:    { start: [['confirmed'], 'in_progress'], finish: [['in_progress'], 'done'] },
+};
+export async function bookingAction(staffUser: StaffUser, code: string, action: string, reason: string | null) {
+  const pushIds: number[] = [];
+  await sql.begin(async (tx) => {
+    const [b] = await tx`select k.*, o.status as order_status from bookings k join orders o on o.code = k.order_code
+                         where k.code = ${code} for update of k`;
+    if (!b) throw new BookingError('not_found', 'ไม่พบการจองนี้');
+    if (!canSee(staffUser, b.business_code)) throw new BookingError('forbidden', 'ไม่มีสิทธิ์ในธุรกิจนี้');
+    if (action === 'cancel') {
+      if (!['holding', 'confirmed', 'checked_in', 'in_progress'].includes(b.status)) throw new BookingError('bad_status', 'ยกเลิกไม่ได้ในสถานะนี้');
+      await tx`update bookings set status = 'cancelled' where code = ${code}`;
+      // ทุกรายการในทริปยกเลิกแล้ว → ทริปยกเลิก
+      await tx`update orders set status = 'cancelled' where code = ${b.order_code}
+               and not exists (select 1 from bookings where order_code = ${b.order_code} and status not in ('cancelled', 'expired'))`;
+      pushIds.push(await enqueue(tx, { booking: code, channel: 'line_push', template: 'cancelled', payload: { reason } }));
+      if (b.calendar_event_id) await enqueue(tx, { booking: code, channel: 'calendar', template: 'cancelled' });
+      return;
+    }
+    if (action === 'no_show') {
+      if (b.status !== 'confirmed') throw new BookingError('bad_status', 'เปลี่ยนเป็นไม่มาได้เฉพาะการจองที่ยืนยันแล้ว');
+      await tx`update bookings set status = 'no_show' where code = ${code}`;
+      return;
+    }
+    const step = FLOW[b.kind]?.[action];
+    if (!step) throw new BookingError('bad_action', 'คำสั่งไม่ถูกต้อง');
+    if (!step[0].includes(b.status)) throw new BookingError('bad_status', 'สถานะการจองไม่ตรงขั้นตอน');
+    await tx`update bookings set status = ${step[1]} where code = ${code}`;
+    if (b.kind === 'slot' && action === 'finish') {
+      pushIds.push(await enqueue(tx, { booking: code, channel: 'line_push', template: 'groom_done' }));
+    }
+  });
+  for (const id of pushIds) await sendDue(1, id).catch(() => undefined);
 }

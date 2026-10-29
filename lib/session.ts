@@ -27,27 +27,30 @@ export function unseal(token: string | undefined): string | null {
   const body = token.slice(0, i), mac = token.slice(i + 1);
   const want = sign(body);
   if (mac.length !== want.length || !timingSafeEqual(Buffer.from(mac), Buffer.from(want))) return null;
-  const [code, exp] = body.split('.');
+  const j = body.lastIndexOf('.');
+  const code = body.slice(0, j), exp = body.slice(j + 1);
   if (!code || Number(exp) < Date.now() / 1000) return null;
   return code;
 }
 
 const opts = { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'lax' as const, path: '/', maxAge: MAX_AGE };
 
-export async function setCustomerCookie(code: string) { (await cookies()).set(COOKIE, seal(code), opts); }
-export async function setStaffCookie(code: string) { (await cookies()).set(STAFF_COOKIE, seal(code), opts); }
-export async function clearCookies() { const c = await cookies(); c.delete(COOKIE); c.delete(STAFF_COOKIE); }
+// ใส่ชนิดไว้ในค่าที่เซ็น กันเอาคุกกี้ลูกค้าไปใช้เป็นคุกกี้พนักงาน
+export async function setCustomerCookie(code: string) { (await cookies()).set(COOKIE, seal('c:' + code), opts); }
+export async function setStaffCookie(code: string) { (await cookies()).set(STAFF_COOKIE, seal('s:' + code), opts); }
+export async function clearStaffCookie() { (await cookies()).delete(STAFF_COOKIE); }
 
 export const demoMode = () => process.env.DEMO_MODE === '1';
 
 // ลูกค้าที่ล็อกอินอยู่ (โหมดเดโม่: ลูกค้าสมมติจาก env)
 export async function currentCustomer(): Promise<string | null> {
   const c = unseal((await cookies()).get(COOKIE)?.value);
-  if (c) return c;
+  if (c?.startsWith('c:')) return c.slice(2);
   if (demoMode() && process.env.DEMO_CUSTOMER) return process.env.DEMO_CUSTOMER;
   return null;
 }
 
 export async function staffCookie(): Promise<string | null> {
-  return unseal((await cookies()).get(STAFF_COOKIE)?.value);
+  const s = unseal((await cookies()).get(STAFF_COOKIE)?.value);
+  return s?.startsWith('s:') ? s.slice(2) : null;
 }

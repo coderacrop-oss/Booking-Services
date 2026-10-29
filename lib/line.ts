@@ -20,7 +20,8 @@ export type LineMessage = { type: 'text'; text: string } | Record<string, unknow
 export async function pushMessage(to: string, messages: LineMessage[]): Promise<void> {
   const token = process.env.LINE_CHANNEL_ACCESS_TOKEN;
   if (!token) throw new Error('ยังไม่ได้ตั้ง LINE_CHANNEL_ACCESS_TOKEN');
-  const r = await fetch('https://api.line.me/v2/bot/message/push', {
+  // LINE_API_BASE ใช้ตอนทดสอบกับเซิร์ฟเวอร์จำลองเท่านั้น
+  const r = await fetch(`${process.env.LINE_API_BASE || 'https://api.line.me'}/v2/bot/message/push`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
     body: JSON.stringify({ to, messages }),

@@ -9,8 +9,9 @@ import LiffGate from '@/components/LiffGate';
 export const dynamic = 'force-dynamic';
 
 // หน้าจองของแต่ละธุรกิจ · ริชเมนูแต่ละอันเปิด LIFF มาที่ /b/<รหัสธุรกิจ>
-export default async function BizPage({ params }: { params: Promise<{ biz: string }> }) {
+export default async function BizPage({ params, searchParams }: { params: Promise<{ biz: string }>; searchParams: Promise<{ date?: string; service?: string }> }) {
   const { biz } = await params;
+  const sp = await searchParams;
   const cat = await getBizCatalog(biz);
   if (!cat) notFound();
   const m = await me();
@@ -18,7 +19,7 @@ export default async function BizPage({ params }: { params: Promise<{ biz: strin
   const pets = m.code ? await getPets(m.code) : [];
   return (
     <LiffGate loggedIn={!!m.code}>
-      <BookingFlow cat={cat} pets={pets} loggedIn={!!m.code} today={todayTH()} />
+      <BookingFlow cat={cat} pets={pets} loggedIn={!!m.code} today={todayTH()} initial={{ date: sp.date, service: sp.service }} />
     </LiffGate>
   );
 }

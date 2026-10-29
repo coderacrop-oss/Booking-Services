@@ -42,8 +42,10 @@ export async function getBizCatalog(code: string): Promise<BizCatalog | null> {
         from pool_sessions ps join units u on u.code = ps.unit_code
         where u.business_code = ${code} and ps.active and u.active order by ps.start_time`,
     sql`select code, label, min_kg, max_kg from weight_tiers order by min_kg`,
-    sql`select from_business, offer_business, offer_item, title, when_rule, condition
-        from cross_sells where from_business = ${code} order by sort`,
+    sql`select x.from_business, x.offer_business, x.offer_item, x.title, x.when_rule, x.condition,
+               b.name as offer_name, b.color as offer_color, b.booking_type as offer_type
+        from cross_sells x join businesses b on b.code = x.offer_business and b.active
+        where x.from_business = ${code} order by x.sort`,
     sql`select unit_code, session_code, to_char(date_from, 'YYYY-MM-DD') as date_from,
                to_char(date_to, 'YYYY-MM-DD') as date_to, reason
         from closures where business_code = ${code} and date_to >= current_date`,

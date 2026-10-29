@@ -10,6 +10,6 @@ export async function GET(req: NextRequest) {
   const secret = process.env.CRON_SECRET;
   if (!secret || req.headers.get('authorization') !== `Bearer ${secret}`) return new NextResponse('unauthorized', { status: 401 });
   const [{ expired }] = await sql`select expire_holds() as expired`;
-  const line = process.env.LINE_CHANNEL_ACCESS_TOKEN ? await sendDue(50) : { sent: 0, failed: 0, skipped: 'no LINE token' };
-  return NextResponse.json({ expired, line });
+  const notify = await sendDue(50);
+  return NextResponse.json({ expired, notify });
 }

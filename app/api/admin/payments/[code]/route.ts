@@ -1,4 +1,5 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest, NextResponse, after } from 'next/server';
+import { sendDue } from '@/lib/notify';
 import { BookingError } from '@/lib/booking';
 import { fail } from '@/lib/api';
 import { reviewPayment } from '@/lib/orders';
@@ -8,6 +9,8 @@ export const dynamic = 'force-dynamic';
 
 // POST { action: 'approve' | 'reject', amount_slip?, reason? }
 export async function POST(req: NextRequest, { params }: { params: Promise<{ code: string }> }) {
+  // ส่งอีเมล/ปฏิทิน/LINE ที่ค้างหลังตอบลูกค้าแล้ว (ไม่ทำให้หน้าเว็บช้า)
+  after(() => sendDue(10).catch(() => undefined));
   try {
     const s = await currentStaff();
     if (!s) return NextResponse.json({ error: 'no_login', message: 'เข้าสู่ระบบพนักงานก่อน' }, { status: 401 });
@@ -15,7 +18,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ cod
     if (b?.action !== 'approve' && b?.action !== 'reject') throw new BookingError('bad_action', 'คำสั่งไม่ถูกต้อง');
     const amt = b.amount_slip === undefined || b.amount_slip === null ? null : Number(b.amount_slip);
     if (amt !== null && !(amt >= 0)) throw new BookingError('bad_amount', 'ยอดในสลิปไม่ถูกต้อง');
-    await reviewPayment(s.code, (await params).code, b.action, amt, b.reason?.slice(0, 200) || null);
+    await reviewPayment(s, (await params).code, b.action, amt, b.reason?.slice(0, 200) || null);
     return NextResponse.json({ ok: true });
   } catch (e) {
     return fail(e);

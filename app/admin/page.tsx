@@ -1,7 +1,8 @@
 import { sql } from '@/lib/db';
-import { currentStaff } from '@/lib/staff';
+import { canSee, currentStaff } from '@/lib/staff';
 import { addDays, baht, thDate, todayTH } from '@/lib/thaidate';
 import { bizLook } from '@/lib/look';
+import BookingActions from '@/components/BookingActions';
 
 export const dynamic = 'force-dynamic';
 
@@ -20,7 +21,7 @@ export default async function AdminToday({ searchParams }: { searchParams: Promi
   const date = /^\d{4}-\d{2}-\d{2}$/.test(sp.date || '') ? sp.date! : todayTH();
 
   const [rows, slips, vax, biz] = await Promise.all([
-    sql`select k.code, k.business_code, k.status, k.price, k.guests,
+    sql`select k.code, k.business_code, k.kind, k.status, k.price, k.guests,
                to_char(k.start_at at time zone 'Asia/Bangkok', 'YYYY-MM-DD HH24:MI') as s,
                to_char(k.end_at at time zone 'Asia/Bangkok', 'YYYY-MM-DD HH24:MI') as e,
                coalesce(u.name, '') as unit, coalesce(sv.name, '') as service, coalesce(st.display_name, '') as staff,
@@ -49,7 +50,7 @@ export default async function AdminToday({ searchParams }: { searchParams: Promi
         <a href="/admin/slips" className="pill" style={{ background: '#FDF5DC', color: '#8A5A00' }}>สลิปรอตรวจ {slips[0].n} ›</a>
         <span className="pill" style={{ background: '#FDF5DC', color: '#8A5A00' }}>วัคซีนรอตรวจ {vax[0].n}</span>
       </div>
-      {biz.map((b) => {
+      {biz.filter((b) => canSee(staff, b.code)).map((b) => {
         const list = rows.filter((r) => r.business_code === b.code);
         const L = bizLook(b.code, b.color, b.booking_type);
         return (
@@ -60,7 +61,7 @@ export default async function AdminToday({ searchParams }: { searchParams: Promi
             </div>
             {list.length > 0 && (
               <table>
-                <thead><tr><th>รหัส</th><th>เวลา</th><th>รายการ</th><th>ลูกค้า · น้อง</th><th>ราคา</th><th>สถานะ</th></tr></thead>
+                <thead><tr><th>รหัส</th><th>เวลา</th><th>รายการ</th><th>ลูกค้า · น้อง</th><th>ราคา</th><th>สถานะ</th><th></th></tr></thead>
                 <tbody>
                   {list.map((r) => {
                     const s = ST[r.status] ?? [r.status, '#eee', '#111'];
@@ -72,6 +73,7 @@ export default async function AdminToday({ searchParams }: { searchParams: Promi
                         <td>{r.customer}{r.pets ? ' · ' + r.pets : ''}</td>
                         <td className="num">{baht(r.price)}</td>
                         <td><span className="pill" style={{ background: s[1], color: s[2] }}>{s[0]}</span>{r.order_status === 'pending_review' && <span className="pill" style={{ background: '#FDF5DC', color: '#8A5A00', marginLeft: 4 }}>สลิปรอตรวจ</span>}</td>
+                        <td><BookingActions code={r.code} kind={r.kind} status={r.status} paid={r.order_status === 'paid'} /></td>
                       </tr>
                     );
                   })}

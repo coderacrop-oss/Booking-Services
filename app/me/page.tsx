@@ -18,7 +18,7 @@ export default async function MyBookings() {
   const orders = await myOrders(m.code);
   return (
     <main className="app">
-      <div className="topbar"><b>การจองของฉัน</b></div>
+      <div className="topbar"><b>การจองของฉัน</b><Link href="/me/pets" className="sub">น้องของฉัน ›</Link></div>
       <div className="body">
         {!orders.length && <div className="sub">ยังไม่มีการจอง · <Link href="/" style={{ textDecoration: 'underline' }}>จองบริการ</Link></div>}
         {orders.map((o) => {

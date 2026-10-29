@@ -4,6 +4,8 @@ import { useRouter } from 'next/navigation';
 import type { BizCatalog, CartItem, Pet, Quote } from '@/lib/types';
 import { addDays, baht, isoDow, thDate, thDay, thRange } from '@/lib/thaidate';
 import { BottomBar, Chip, Photo, Progress, Stepper, Tick, TopBar } from './ui';
+import { clearTrip, loadTrip, saveTrip, type TripEntry } from '@/lib/trip';
+import { bizLook } from '@/lib/look';
 
 type StepKey = 'dates' | 'guests' | 'pets' | 'pet' | 'unit' | 'session' | 'service' | 'addons' | 'slot' | 'summary';
 type Avail<T> = { loading: boolean; error: string | null; data: T | null };
@@ -31,7 +33,8 @@ function useFetch<T>(url: string | null, body?: unknown): Avail<T> {
   return st;
 }
 
-export default function BookingFlow({ cat, pets, loggedIn, today }: { cat: BizCatalog; pets: Pet[]; loggedIn: boolean; today: string }) {
+export default function BookingFlow({ cat, pets, loggedIn, today, initial }:
+  { cat: BizCatalog; pets: Pet[]; loggedIn: boolean; today: string; initial?: { date?: string; service?: string } }) {
   const router = useRouter();
   const b = cat.business;
   const forPeople = cat.units.some((u) => u.max_people);              // Villa = ที่พักคน
@@ -46,21 +49,24 @@ export default function BookingFlow({ cat, pets, loggedIn, today }: { cat: BizCa
 
   const [i, setI] = useState(0);
   const step = steps[i];
-  const [from, setFrom] = useState(today);
+  const start = initial?.date && /^\d{4}-\d{2}-\d{2}$/.test(initial.date) && initial.date >= today ? initial.date : today;
+  const [from, setFrom] = useState(start);
   const [nights, setNights] = useState(1);
   const to = addDays(from, nights);
   const [guests, setGuests] = useState(2);
   const [sel, setSel] = useState<string[]>([]);            // น้องที่เลือก
   const [unit, setUnit] = useState<string | null>(null);
-  const [date, setDate] = useState(today);
+  const [date, setDate] = useState(start);
   const [session, setSession] = useState<string | null>(null);
-  const [service, setService] = useState<string | null>(null);
+  const [service, setService] = useState<string | null>(initial?.service && mains.some((m) => m.code === initial.service) ? initial.service : null);
   const [addons, setAddons] = useState<string[]>([]);
   const [slot, setSlot] = useState<{ start: string; staff: string; staff_name: string } | null>(null);
   const [toast] = useState('');
   const [accept, setAccept] = useState(false);
   const [busy, setBusy] = useState(false);
   const [orderErr, setOrderErr] = useState('');
+  const [trip, setTrip] = useState<TripEntry[]>([]);
+  useEffect(() => setTrip(loadTrip()), []);
 
   const chosenPets = pets.filter((p) => sel.includes(p.code));
   const pet = chosenPets[0] ?? null;
@@ -86,7 +92,8 @@ export default function BookingFlow({ cat, pets, loggedIn, today }: { cat: BizCa
     if (b.booking_type === 'slot' && service && slot && pet) return { business: b.code, kind: 'slot', service, addons, staff: slot.staff, start: `${date}T${slot.start}`, pet: pet.code };
     return null;
   }, [b, unit, from, to, sel, guests, forPeople, session, date, service, slot, pet, addons]);
-  const q = useFetch<Quote>(step === 'summary' && cart ? '/api/quote' : null, cart ? { items: [cart] } : undefined);
+  const allItems = cart ? [...trip.map((t) => t.item), cart] : [];
+  const q = useFetch<Quote>(step === 'summary' && cart ? '/api/quote' : null, cart ? { items: allItems } : undefined);
 
   // ---------- ราคาประมาณ (ระหว่างเลือก) ----------
   const estimate = (() => {
@@ -130,14 +137,28 @@ export default function BookingFlow({ cat, pets, loggedIn, today }: { cat: BizCa
     setI(Math.min(n, steps.length - 1));
     window.scrollTo(0, 0);
   };
+  // ขายข้ามธุรกิจ: เก็บรายการนี้ไว้ในทริป แล้วไปเลือกบริการถัดไป (จ่ายรวม QR เดียว)
+  const offerDate = (rule: string) => b.booking_type !== 'stay' ? date
+    : rule === 'checkout_day' ? to : nights > 1 ? addDays(from, 1) : from;
+  const addOffer = (x: BizCatalog['cross_sells'][number]) => {
+    if (!cart || !q.data) return;
+    const qi = q.data.items[q.data.items.length - 1];
+    saveTrip([...trip, { item: cart, title: qi.title, when: qi.when, business_name: b.name }]);
+    const svc = x.offer_item ? `&service=${encodeURIComponent(x.offer_item)}` : '';
+    router.push(`/b/${x.offer_business}?trip=1&date=${offerDate(x.when_rule)}${svc}`);
+  };
+  const removeTrip = (k: number) => { const t = trip.filter((_, j) => j !== k); setTrip(t); saveTrip(t); };
+  const offers = cat.cross_sells.filter((x) => !/น้อง/.test(x.condition || '') || sel.length > 0);
+
   // สร้างการจองจริง → ไปหน้าจ่าย
   const placeOrder = async () => {
     if (!cart) return;
     setBusy(true); setOrderErr('');
-    const r = await fetch('/api/orders', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ items: [cart], accept }) });
+    const r = await fetch('/api/orders', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ items: allItems, accept }) });
     const j = await r.json().catch(() => ({}));
     setBusy(false);
     if (!r.ok) { setOrderErr(j.message || 'จองไม่สำเร็จ'); return; }
+    clearTrip();
     router.push(j.paid ? `/me?done=${j.order}` : `/pay/${j.order}`);
   };
   const toggle = (code: string, single = false) => {
@@ -150,6 +171,11 @@ export default function BookingFlow({ cat, pets, loggedIn, today }: { cat: BizCa
     <>
       {!loggedIn && <div className="warn"><span className="ms">info</span>เปิดหน้านี้ผ่าน LINE ของร้านเพื่อเลือกน้องและจอง</div>}
       {loggedIn && !pets.length && <div className="warn"><span className="ms">info</span>ยังไม่มีข้อมูลน้องในบัญชีนี้</div>}
+      {loggedIn && (
+        <a className="btn ghost" style={{ alignSelf: 'flex-start', height: 40 }} href={`/me/pets?back=/b/${b.code}`}>
+          <span className="ms">{b.need_vaccine ? 'vaccines' : 'add'}</span>{b.need_vaccine ? 'เพิ่มน้อง / ส่งรูปวัคซีน' : 'เพิ่มน้อง'}
+        </a>
+      )}
       {pets.map((p) => {
         const ok = vaxOk(p, serviceDate);
         return (
@@ -317,6 +343,35 @@ export default function BookingFlow({ cat, pets, loggedIn, today }: { cat: BizCa
           {q.data.pay_later > 0 && <div className="l"><span>จ่ายที่ร้าน</span><span className="num">{baht(q.data.pay_later)}</span></div>}
         </div>
       )}
+      {trip.length > 0 && (
+        <>
+          <div className="section">รายการก่อนหน้าในทริปนี้</div>
+          {trip.map((t, k) => (
+            <div key={k} className="card" style={{ padding: 10 }}>
+              <span className="t"><b style={{ fontSize: 14 }}>{t.business_name} · {t.title}</b><small>{t.when}</small></span>
+              <button className="sub" onClick={() => removeTrip(k)}>เอาออก</button>
+            </div>
+          ))}
+        </>
+      )}
+      {q.data && loggedIn && trip.length < 6 && offers.length > 0 && (
+        <>
+          <div className="section">เพิ่มให้ทริปนี้ · จ่ายรวม QR เดียว</div>
+          {offers.map((x) => {
+            const L = bizLook(x.offer_business, x.offer_color, x.offer_type);
+            return (
+              <div key={x.offer_business + x.title} className="card" style={{ padding: 12 }}>
+                <span className="t">
+                  <span className="tag" style={{ background: L.bg, color: L.fg, alignSelf: 'flex-start' }}><span className="ms" style={{ fontSize: 15 }}>{L.icon}</span>{x.offer_name}</span>
+                  <b style={{ fontSize: 15 }}>{x.title}</b>
+                  <small>{thDate(offerDate(x.when_rule))}{x.condition ? ' · ' + x.condition : ''}</small>
+                </span>
+                <button className="btn ghost" style={{ height: 36, padding: '0 14px', fontSize: 14 }} onClick={() => addOffer(x)}>+ เพิ่ม</button>
+              </div>
+            );
+          })}
+        </>
+      )}
       <div className="section">เงื่อนไขการจองและยกเลิก</div>
       <div className="sub" style={{ fontSize: 13 }}>{b.cancel_policy}</div>
       <div className="sub" style={{ fontSize: 13 }}>หลังกดชำระเงิน ร้านกันที่ไว้ {cat.hold_minutes} นาที แนบสลิปไม่ทันระบบจะปล่อยที่ให้คนอื่น</div>
@@ -332,7 +387,10 @@ export default function BookingFlow({ cat, pets, loggedIn, today }: { cat: BizCa
     <main className="app">
       <TopBar title={`จอง ${b.name}`} step={`ขั้น ${i + 1}/${steps.length}`} onBack={() => go(-1)} />
       <Progress n={steps.length} at={i} />
-      <div className="body">{content}</div>
+      <div className="body">
+        {trip.length > 0 && step !== 'summary' && <div className="warn"><span className="ms">info</span>ทริปนี้มี {trip.length} รายการก่อนหน้า · จ่ายรวม QR เดียวตอนสรุป</div>}
+        {content}
+      </div>
       <BottomBar
         note={last ? 'จ่ายวันนี้' : note}
         amount={baht(last && q.data ? q.data.due_now : estimate)}
