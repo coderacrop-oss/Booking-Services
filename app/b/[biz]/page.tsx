@@ -1,8 +1,10 @@
 import { notFound } from 'next/navigation';
 import { getBizCatalog, getPets } from '@/lib/catalog';
-import { currentCustomer } from '@/lib/session';
+import { me } from '@/lib/me';
 import { todayTH } from '@/lib/thaidate';
 import BookingFlow from '@/components/BookingFlow';
+import Consent from '@/components/Consent';
+import LiffGate from '@/components/LiffGate';
 
 export const dynamic = 'force-dynamic';
 
@@ -11,7 +13,12 @@ export default async function BizPage({ params }: { params: Promise<{ biz: strin
   const { biz } = await params;
   const cat = await getBizCatalog(biz);
   if (!cat) notFound();
-  const customer = await currentCustomer();
-  const pets = customer ? await getPets(customer) : [];
-  return <BookingFlow cat={cat} pets={pets} loggedIn={!!customer} today={todayTH()} />;
+  const m = await me();
+  if (m.code && !m.consented) return <Consent shop={cat.shop_name} />;
+  const pets = m.code ? await getPets(m.code) : [];
+  return (
+    <LiffGate loggedIn={!!m.code}>
+      <BookingFlow cat={cat} pets={pets} loggedIn={!!m.code} today={todayTH()} />
+    </LiffGate>
+  );
 }

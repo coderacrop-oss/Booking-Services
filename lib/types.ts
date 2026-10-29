@@ -114,5 +114,14 @@ export interface QuoteItem {
   lines: QuoteLine[];
   price: number;
   deposit: number;
+  start_at: string; // timestamptz (+07)
+  end_at: string;
 }
 export interface Quote { items: QuoteItem[]; total: number; due_now: number; pay_later: number }
+
+export interface OrderView {
+  code: string; status: 'holding' | 'pending_review' | 'paid' | 'cancelled' | 'expired';
+  total: number; due_now: number; hold_until: string | null; late: boolean;
+  last_payment: { status: string; reason: string | null } | null;
+  items: { code: string; business_code: string; biz: string; status: string; price: number; s: string; e: string; item: string; pets: string }[];
+}

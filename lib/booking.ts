@@ -157,7 +157,7 @@ export async function quote(customer: string, items: CartItem[]): Promise<Quote>
   for (const it of items) {
     const b = await business(it.business);
     if (b.booking_type !== it.kind) throw new BookingError('wrong_type', 'ชนิดการจองไม่ตรงธุรกิจ');
-    let title = '', when = '', price = 0;
+    let title = '', when = '', price = 0, start_at = '', end_at = '';
     const lines: QuoteLine[] = [];
 
     if (it.kind === 'stay') {
@@ -181,6 +181,7 @@ export async function quote(customer: string, items: CartItem[]): Promise<Quote>
       }
       title = pets.length ? `${u.name} · ${pets.map((p) => p.name).join(', ')}` : u.name;
       when = `${thRange(it.from, it.to)} · ${nights} คืน`;
+      const t = stayTimes(b); start_at = at(it.from, t.in); end_at = at(it.to, t.out);
     }
 
     if (it.kind === 'session') {
@@ -194,6 +195,7 @@ export async function quote(customer: string, items: CartItem[]): Promise<Quote>
       lines.push({ label: `รอบ ${s.start}–${s.end} × ${pets.length} ตัว`, amount: Number(ps.price) * pets.length });
       title = `สระ ${s.start} · ${pets.map((p) => p.name).join(', ')}`;
       when = thDate(it.date);
+      start_at = at(it.date, s.start); end_at = at(it.date, s.end);
     }
 
     if (it.kind === 'slot') {
@@ -211,10 +213,11 @@ export async function quote(customer: string, items: CartItem[]): Promise<Quote>
       for (const a of d.addons) lines.push({ label: a.name, amount: a.price });
       title = `${d.name} · ${pet.name}`;
       when = `${thDate(date)} · ${time}`;
+      start_at = at(date, time); end_at = at(date, fromMin(toMin(time) + av.minutes));
     }
 
     price = lines.reduce((a, l) => a + l.amount, 0);
-    out.push({ business: b.code, title, when, lines, price, deposit: depositOf(b, price) });
+    out.push({ business: b.code, title, when, lines, price, deposit: depositOf(b, price), start_at, end_at });
   }
   const total = out.reduce((a, i) => a + i.price, 0);
   const due_now = out.reduce((a, i) => a + i.deposit, 0);

@@ -1,0 +1,24 @@
+import { notFound } from 'next/navigation';
+import QRCode from 'qrcode';
+import { getOrder } from '@/lib/orders';
+import { getSetting } from '@/lib/catalog';
+import { me } from '@/lib/me';
+import { promptPayPayload } from '@/lib/promptpay';
+import LiffGate from '@/components/LiffGate';
+import PayBox from '@/components/PayBox';
+
+export const dynamic = 'force-dynamic';
+
+// หน้าจ่ายมัดจำ: QR พร้อมเพย์ตามยอด + แนบสลิป
+export default async function PayPage({ params }: { params: Promise<{ code: string }> }) {
+  const { code } = await params;
+  const m = await me();
+  if (!m.code) return <LiffGate loggedIn={false}><main className="app"><div className="body"><div className="warn">เปิดหน้านี้ผ่าน LINE ของร้าน</div></div></main></LiffGate>;
+  const o = await getOrder(m.code, code);
+  if (!o) notFound();
+  const [pp, account, shop] = await Promise.all([getSetting('promptpay_id'), getSetting('account_name'), getSetting('shop_name', 'ร้าน')]);
+  let qr = '';
+  try { qr = await QRCode.toString(promptPayPayload(pp, Number(o.due_now)), { type: 'svg', margin: 1, errorCorrectionLevel: 'M' }); }
+  catch { qr = ''; }   // ยังไม่ได้ตั้งเลขพร้อมเพย์ที่ถูกต้อง
+  return <PayBox order={o} qr={qr} account={account} shop={shop} />;
+}

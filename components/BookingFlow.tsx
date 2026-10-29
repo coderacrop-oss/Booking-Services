@@ -57,7 +57,10 @@ export default function BookingFlow({ cat, pets, loggedIn, today }: { cat: BizCa
   const [service, setService] = useState<string | null>(null);
   const [addons, setAddons] = useState<string[]>([]);
   const [slot, setSlot] = useState<{ start: string; staff: string; staff_name: string } | null>(null);
-  const [toast, setToast] = useState('');
+  const [toast] = useState('');
+  const [accept, setAccept] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [orderErr, setOrderErr] = useState('');
 
   const chosenPets = pets.filter((p) => sel.includes(p.code));
   const pet = chosenPets[0] ?? null;
@@ -118,7 +121,7 @@ export default function BookingFlow({ cat, pets, loggedIn, today }: { cat: BizCa
     service: !!service,
     addons: true,
     slot: !!slot,
-    summary: !!q.data,
+    summary: !!q.data && accept,
   };
 
   const go = (d: number) => {
@@ -127,7 +130,16 @@ export default function BookingFlow({ cat, pets, loggedIn, today }: { cat: BizCa
     setI(Math.min(n, steps.length - 1));
     window.scrollTo(0, 0);
   };
-  const flash = (m: string) => { setToast(m); setTimeout(() => setToast(''), 2200); };
+  // สร้างการจองจริง → ไปหน้าจ่าย
+  const placeOrder = async () => {
+    if (!cart) return;
+    setBusy(true); setOrderErr('');
+    const r = await fetch('/api/orders', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ items: [cart], accept }) });
+    const j = await r.json().catch(() => ({}));
+    setBusy(false);
+    if (!r.ok) { setOrderErr(j.message || 'จองไม่สำเร็จ'); return; }
+    router.push(j.paid ? `/me?done=${j.order}` : `/pay/${j.order}`);
+  };
   const toggle = (code: string, single = false) => {
     setSel((s) => (single ? [code] : s.includes(code) ? s.filter((x) => x !== code) : [...s, code]));
     setUnit(null); setSession(null); setSlot(null);
@@ -305,7 +317,13 @@ export default function BookingFlow({ cat, pets, loggedIn, today }: { cat: BizCa
           {q.data.pay_later > 0 && <div className="l"><span>จ่ายที่ร้าน</span><span className="num">{baht(q.data.pay_later)}</span></div>}
         </div>
       )}
+      <div className="section">เงื่อนไขการจองและยกเลิก</div>
       <div className="sub" style={{ fontSize: 13 }}>{b.cancel_policy}</div>
+      <div className="sub" style={{ fontSize: 13 }}>หลังกดชำระเงิน ร้านกันที่ไว้ {cat.hold_minutes} นาที แนบสลิปไม่ทันระบบจะปล่อยที่ให้คนอื่น</div>
+      <button className={'card' + (accept ? ' on' : '')} onClick={() => setAccept(!accept)}>
+        <span className="t"><b style={{ fontSize: 15 }}>อ่านและยอมรับเงื่อนไขแล้ว</b></span><Tick on={accept} />
+      </button>
+      {orderErr && <div className="err">{orderErr}</div>}
     </>
   );
 
@@ -321,7 +339,8 @@ export default function BookingFlow({ cat, pets, loggedIn, today }: { cat: BizCa
         label={last ? 'ชำระเงิน' : step === 'addons' && !addons.length ? 'ข้าม' : 'ต่อไป'}
         red={last}
         disabled={!valid[step]}
-        onClick={() => (last ? flash('ระบบชำระเงินยังไม่เปิดในเวอร์ชันนี้') : go(1))}
+        busy={busy}
+        onClick={() => (last ? placeOrder() : go(1))}
       />
       {toast && <div className="toast">{toast}</div>}
     </main>

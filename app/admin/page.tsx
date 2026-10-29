@@ -15,7 +15,7 @@ const ST: Record<string, [string, string, string]> = {
 // หลังบ้าน · วันนี้ (อ่านอย่างเดียวในเวอร์ชันนี้)
 export default async function AdminToday({ searchParams }: { searchParams: Promise<{ date?: string }> }) {
   const staff = await currentStaff();
-  if (!staff) return <main className="admin"><b>เข้าสู่ระบบด้วย LINE ของพนักงาน</b></main>;
+  if (!staff) return null;
   const sp = await searchParams;
   const date = /^\d{4}-\d{2}-\d{2}$/.test(sp.date || '') ? sp.date! : todayTH();
 
@@ -46,7 +46,7 @@ export default async function AdminToday({ searchParams }: { searchParams: Promi
         <a className="btn ghost" href={`?date=${addDays(date, 1)}`}>›</a>
       </div>
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-        <span className="pill" style={{ background: '#FDF5DC', color: '#8A5A00' }}>สลิปรอตรวจ {slips[0].n}</span>
+        <a href="/admin/slips" className="pill" style={{ background: '#FDF5DC', color: '#8A5A00' }}>สลิปรอตรวจ {slips[0].n} ›</a>
         <span className="pill" style={{ background: '#FDF5DC', color: '#8A5A00' }}>วัคซีนรอตรวจ {vax[0].n}</span>
       </div>
       {biz.map((b) => {

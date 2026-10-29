@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { sessionAvailability, slotAvailability, stayAvailability } from '@/lib/booking';
 import { BookingError } from '@/lib/booking';
 import { CODE, DATE, fail } from '@/lib/api';
+import { sql } from '@/lib/db';
 
 export const dynamic = 'force-dynamic';
 
@@ -17,6 +18,7 @@ export async function GET(req: NextRequest) {
   };
   try {
     const biz = need('biz', CODE);
+    await sql`select expire_holds()`; // ปล่อยที่ที่หมดเวลาก่อนนับที่ว่าง
     const type = q.get('type');
     if (type === 'stay') {
       const units = await stayAvailability(biz, need('from', DATE), need('to', DATE), Number(q.get('pets') || 0),
