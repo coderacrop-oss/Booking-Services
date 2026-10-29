@@ -52,6 +52,12 @@ export default async function Today({ searchParams }: { searchParams: Promise<{ 
           <span className="t"><b>วัคซีนรอตรวจ</b><small>{cnt.vaccines ? 'รอตรวจ' : 'ไม่มีค้าง'}</small></span>
           <span className="n num" style={{ color: cnt.vaccines ? undefined : 'var(--ink-3)' }}>{cnt.vaccines}</span><span className="ms go">chevron_right</span>
         </Link>
+        {cnt.refunds.map((r) => (
+          <Link key={r.code} href={`/admin/b/${r.code}`} className="li hot">
+            <span className="ms">currency_exchange</span>
+            <span className="t"><b>รอโอนคืน · {r.customer}</b><small>{r.code}</small></span>
+            <span className="n num">฿{Number(r.amount).toLocaleString('th-TH')}</span><span className="ms go">chevron_right</span>
+          </Link>))}
         <Link href="/admin/cal" className="li">
           <span className="ms">login</span>
           <span className="t"><b>เช็กอินวันนี้</b><small>{ciBiz || 'ไม่มี'}</small></span>

@@ -134,7 +134,7 @@ export async function applySetting(s: StaffUser, kind: string, d: D) {
       const reason = str(d.reason, 80) || null;
       // การจองที่โดนวันปิด: ต้องยืนยันก่อน แล้วระบบแจ้งลูกค้าทุกคน (ร้านเลื่อน/คืนเงินเต็มต่อในหน้าการจอง)
       const hit = await sql`
-        select distinct k.order_code from bookings k
+        select distinct k.order_code, o.status as order_status from bookings k join orders o on o.code = k.order_code
         where k.business_code = ${biz} and booking_active(k.status)
           and (${unit}::text is null or k.unit_code = ${unit}) and (${sess}::text is null or k.session_code = ${sess})
           and tstzrange(k.start_at, k.end_at, '[)') && tstzrange((${from}::date)::timestamp at time zone 'Asia/Bangkok', ((${to}::date) + 1)::timestamp at time zone 'Asia/Bangkok', '[)')`;
@@ -142,7 +142,22 @@ export async function applySetting(s: StaffUser, kind: string, d: D) {
       await sql.begin(async (tx) => {
         await tx`insert into closures (business_code, unit_code, session_code, date_from, date_to, reason)
                   values (${biz}, ${unit}, ${sess}, ${from}, ${to}, ${reason})`;
-        for (const h of hit) await enqueue(tx, { order: h.order_code, channel: 'line_push', template: 'closed_day', payload: { reason } });
+        for (const h of hit) {
+          if (h.order_status === 'holding') {
+            // ยังไม่ได้ยืนยัน (รอสลิป) → ยกเลิกเลย กันลูกค้าโอนเข้ามาในวันที่ปิด · เงินที่ได้บางส่วน/เครดิตคืนอัตโนมัติ
+            const [c] = await tx`update orders set status = 'cancelled', cancel_source = 'closed', hold_until = null
+                                 where code = ${h.order_code} and status = 'holding' returning code`;
+            if (!c) continue;
+            await tx`update bookings set status = 'cancelled' where order_code = ${h.order_code} and status = 'holding'`;
+            await tx`update payments set status = 'rejected', reject_kind = 'other', reject_reason = 'ร้านปิดวันที่จอง'
+                     where order_code = ${h.order_code} and status = 'pending'`;
+            await tx`select release_money(${h.order_code})`;
+            await enqueue(tx, { order: h.order_code, channel: 'line_push', template: 'cancelled',
+              payload: { reason: `ร้านปิดวันที่จอง${reason ? ' (' + reason + ')' : ''} · จองวันอื่นได้เลย` } });
+          } else {
+            await enqueue(tx, { order: h.order_code, channel: 'line_push', template: 'closed_day', payload: { reason } });
+          }
+        }
       });
       return { affected: hit.length };
     }
@@ -168,7 +183,8 @@ export async function applySetting(s: StaffUser, kind: string, d: D) {
       const rules = (Array.isArray(d.cancel_rules) ? (d.cancel_rules as D[]) : [])
         .map((r) => ({ days: int(r.days, 0, 365) ?? 0, refund: int(r.refund, 0, 100) ?? 0 })).sort((a, b) => b.days - a.days).slice(0, 6);
       const text = str(d.cancel_policy, 400) || policyText(rules);
-      await sql`update businesses set deposit_type = ${type}, deposit_value = ${val}, cancel_rules = ${sql.json(rules)}, cancel_policy = ${text} where code = ${biz}`;
+      const bd = type === 'full' || !d.balance_days ? null : Math.min(60, Math.max(1, Math.round(Number(d.balance_days)) || 0)) || null;
+      await sql`update businesses set deposit_type = ${type}, deposit_value = ${val}, balance_days = ${bd}, cancel_rules = ${sql.json(rules)}, cancel_policy = ${text} where code = ${biz}`;
       if (d.hold_minutes !== undefined) { owner(s); const h = int(d.hold_minutes, 5, 1440) ?? 30; await sql`update settings set value = ${String(h)} where key = 'hold_minutes'`; }
       return {};
     }

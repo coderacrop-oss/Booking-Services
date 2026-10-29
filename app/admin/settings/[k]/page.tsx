@@ -25,7 +25,7 @@ export default async function SettingPage({ params }: { params: Promise<{ k: str
   if (!TITLE[k]) notFound();
   const ownerOnly = ['msg', 'pay', 'staff', 'connect'].includes(k);
   if (ownerOnly && s.role !== 'owner') return <><Head back="/admin/settings" cap="ตั้งค่าร้าน" title={TITLE[k]} /><div className="warn">เฉพาะเจ้าของร้าน</div></>;
-  const biz = (await sql`select code, name, color, booking_type, open_hours, closed_weekdays, checkin_time, checkout_time, deposit_type, deposit_value, cancel_rules, cancel_policy
+  const biz = (await sql`select code, name, color, booking_type, open_hours, closed_weekdays, checkin_time, checkout_time, deposit_type, deposit_value, balance_days, cancel_rules, cancel_policy
                          from businesses where active order by sort`).filter((b) => canSee(s, b.code));
   let body: React.ReactNode = null;
 

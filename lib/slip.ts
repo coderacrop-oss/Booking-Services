@@ -16,7 +16,7 @@ export type SlipResult = {
   amount: number | null;
   ocr: 'vision' | 'off' | 'nokey' | 'quota' | 'error';
   flags: string[];          // จุดที่พนักงานต้องดู (ภาษาคน)
-  dupOf?: { order: string; status: string };   // สลิปซ้ำกับใบไหน
+  dupOf?: { order: string; status: string; kind: string | null };   // สลิปซ้ำกับใบไหน
   ok: string[];             // จุดที่ตรง
   message?: string;         // ข้อความถึงลูกค้าเมื่อไม่รับ
 };
@@ -135,10 +135,10 @@ export async function checkSlip(buf: Buffer, o: { due: number; createdAt: Date; 
   const slipQr = !!ref;                 // QR อื่น (เช่น QR แอดไลน์) ไม่นับว่าเป็น QR ของสลิป
 
   // กันซ้ำ: เลขอ้างอิงเดิม หรือไฟล์เดิม
-  const [dup] = await sql`select order_code, status from payments where slip_hash = ${hash} or (${ref}::text is not null and slip_ref = ${ref})
+  const [dup] = await sql`select order_code, status, reject_kind from payments where slip_hash = ${hash} or (${ref}::text is not null and slip_ref = ${ref})
                           order by created_at desc limit 1`;
   if (dup) {
-    return { verdict: 'duplicate', ref, hash, amount: null, ocr: 'off', flags, ok, dupOf: { order: dup.order_code, status: dup.status },
+    return { verdict: 'duplicate', ref, hash, amount: null, ocr: 'off', flags, ok, dupOf: { order: dup.order_code, status: dup.status, kind: dup.reject_kind ?? null },
              message: 'สลิปนี้เคยใช้แล้ว · แนบสลิปของการโอนครั้งนี้' };
   }
 

@@ -92,8 +92,8 @@ async function lineFor(j: Job, forEmail = false): Promise<{ to: string; text: st
   const btn = (label: string, path?: string) => { const u = path ? payUrl : url; return u ? { label, url: u } : undefined; };
   const old = typeof j.payload.old === 'string' ? `${thDate(j.payload.old.slice(0, 10))} ${j.payload.old.slice(11, 16)}` : '';
   const T: Partial<Record<Template, [string, Card]>> = {
-    paid: [`${name}: ร้านตรวจสลิปแล้ว การจองยืนยันเรียบร้อย ✅\n${list}`,
-      { head: `${name} · ยืนยันการจอง`, headColor: '#1E7B4A', title: 'จองเรียบร้อย ✅', items,
+    paid: [j.payload.balance ? `${name}: ได้รับยอดคงเหลือแล้ว ชำระครบเรียบร้อย ✅\n${list}` : `${name}: ร้านตรวจสลิปแล้ว การจองยืนยันเรียบร้อย ✅\n${list}`,
+      { head: `${name} · ${j.payload.balance ? 'ยอดคงเหลือ' : 'ยืนยันการจอง'}`, headColor: '#1E7B4A', title: j.payload.balance ? 'ชำระครบแล้ว ✅' : 'จองเรียบร้อย ✅', items,
         rows: [['ชำระแล้ว', baht(Number(c.paid_amount) || Number(c.due_now))], ...(Number(c.total) > Number(c.due_now) ? [['จ่ายที่ร้าน', baht(Number(c.total) - Number(c.due_now))] as [string, string]] : [])], button: btn('ดูการจอง') }],
     slip_rejected: [`${name}: สลิปยังไม่ผ่าน — ${j.payload.reason ?? ''}\nแนบสลิปใหม่ได้ที่เมนู "การจองของฉัน"\n${list}`,
       { head: `${name} · ตรวจสลิป`, headColor: '#B8262E', title: 'สลิปยังไม่ผ่าน', body: String(j.payload.reason ?? ''), items, button: btn('แนบสลิปใหม่', `/pay/${c.code}`) }],
@@ -233,8 +233,11 @@ function readyChannels(): Channel[] {
 export async function sendDue(limit = 20, onlyId?: number): Promise<{ sent: number; failed: number; skipped: number }> {
   const ch = readyChannels();
   if (!ch.length) return { sent: 0, failed: 0, skipped: 0 };
+  // แถวที่ค้างสถานะกำลังส่งเกิน 10 นาที (ส่งไม่จบ) คืนเข้าคิว
+  await sql`update notifications set status = 'queued' where status = 'sending' and claimed_at < now() - interval '10 minutes'`;
+  // หยิบแถวพร้อมเปลี่ยนเป็นกำลังส่งในคำสั่งเดียว กันรอบส่งที่ทับกันหยิบแถวเดิม
   const jobs = await sql<Job[]>`
-    update notifications n set tries = tries + 1
+    update notifications n set tries = tries + 1, status = 'sending', claimed_at = now()
     where n.id in (select id from notifications
                    where status = 'queued' and run_after <= now() and channel in ${sql(ch)}
                      and (${onlyId ?? null}::bigint is null or id = ${onlyId ?? null})

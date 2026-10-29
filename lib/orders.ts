@@ -155,11 +155,12 @@ export async function createOrder(customer: string, items: CartItem[], acceptedP
     const chk = await checkSlip(file, { due: left, createdAt: new Date(o.created_at), account, promptpay });
     if (chk.verdict !== 'review') {
       // ส่งสลิปเดิมที่ร้านกดไม่พบเงินไปแล้ว = ยกเลิกการจอง (ระบบเดิม M19.1)
-      if (purpose === 'deposit' && chk.dupOf?.order === code && chk.dupOf.status === 'rejected') {
+      if (purpose === 'deposit' && chk.dupOf?.order === code && chk.dupOf.status === 'rejected' && chk.dupOf.kind === 'not_found') {
         const ids: number[] = [];
         await sql.begin(async (tx) => {
           await tx`update orders set status = 'cancelled', cancel_source = 'slip', hold_until = null, slip_dup_count = slip_dup_count + 1 where code = ${code} and status = 'holding'`;
           await tx`update bookings set status = 'cancelled' where order_code = ${code} and status = 'holding'`;
+          await tx`select release_money(${code})`;   // คืนเครดิตที่ใช้ · เงินที่ได้บางส่วนตั้งเป็นรอโอนคืน
           ids.push(await enqueue(tx, { order: code, channel: 'line_push', template: 'cancelled', payload: { reason: 'ส่งสลิปเดิมที่ร้านไม่พบเงิน · จองใหม่และแนบหลักฐานใหม่ได้' } }));
         });
         for (const id of ids) await sendDue(1, id).catch(() => undefined);
@@ -263,6 +264,12 @@ export async function reviewPayment(staffUser: StaffUser, payment: string, actio
       if (p.order_status !== 'pending_review') throw new BookingError('bad_status', 'การจองนี้ไม่ได้รอตรวจสลิป');
 
       if (action === 'approve') {
+        // วันที่จองโดนปิดหลังลูกค้าแนบสลิป → ไม่ให้ยืนยัน ให้บันทึกยอดแล้วยกเลิกพร้อมคืนเงิน
+        const [cl] = await tx`select 1 from bookings k join closures c on c.business_code = k.business_code
+          and (c.unit_code is null or c.unit_code = k.unit_code) and (c.session_code is null or c.session_code = k.session_code)
+          and tstzrange(k.start_at, k.end_at, '[)') && tstzrange(c.date_from::timestamp at time zone 'Asia/Bangkok', (c.date_to + 1)::timestamp at time zone 'Asia/Bangkok', '[)')
+          where k.order_code = ${p.order_code} and k.status not in ('cancelled', 'expired') limit 1`;
+        if (cl) throw new BookingError('closed_day', 'วันที่จองร้านปิดแล้ว · กด "ได้บางส่วน" ใส่ยอดที่ได้รับ แล้วยกเลิกพร้อมคืนเงินในหน้าการจอง');
         const amt = amountSlip ?? r2(due - before);
         const total = r2(before + amt);
         if (total + 0.005 < due) throw new BookingError('short', `ยอดรวมที่ได้ ${baht(total)} ยังขาด ${baht(due - total)} · กด "ได้บางส่วน" เพื่อขอส่วนที่ขาด`);
@@ -308,6 +315,7 @@ export async function reviewPayment(staffUser: StaffUser, payment: string, actio
         // ไม่ผ่านครั้งที่ 2 → ยกเลิก ให้จองใหม่ (ระบบเดิม M19.1)
         await tx`update orders set status = 'cancelled', reject_count = ${n}, cancel_source = 'slip', hold_until = null where code = ${p.order_code}`;
         await tx`update bookings set status = 'cancelled' where order_code = ${p.order_code} and status = 'holding'`;
+        await tx`select release_money(${p.order_code})`;
         pushIds.push(await enqueue(tx, { order: p.order_code, channel: 'line_push', template: 'cancelled',
           payload: { reason: `สลิปไม่ผ่านครั้งที่ ${n} (${reason}) · จองใหม่และแนบหลักฐานใหม่ได้` } }));
       } else {

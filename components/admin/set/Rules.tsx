@@ -5,7 +5,7 @@ import { bizLook } from '@/lib/look';
 import { DAYS, DayPick, Switch, useSave } from './util';
 
 type B = { code: string; name: string; color: string | null; booking_type: string; open_hours: string | null; closed_weekdays: number[];
-  checkin_time: string | null; checkout_time: string | null; deposit_type: string; deposit_value: number | null; cancel_rules: { days: number; refund: number }[]; cancel_policy: string };
+  checkin_time: string | null; checkout_time: string | null; deposit_type: string; deposit_value: number | null; balance_days: number | null; cancel_rules: { days: number; refund: number }[]; cancel_policy: string };
 type C = { id: number; business_code: string; unit_code: string | null; session_code: string | null; date_from: string; date_to: string; reason: string | null; item: string | null };
 
 // ---------- เวลาเปิดและวันหยุด ----------
@@ -94,6 +94,7 @@ export function Deposit({ biz, hold, isOwner }: { biz: B[]; hold: number; isOwne
       <span className="cap">มัดจำ</span>
       <div className="segbox">{[['full', 'จ่ายเต็ม'], ['percent', '%'], ['fixed', 'บาท']].map(([t, l]) => <button key={t} className={b.deposit_type === t ? 'on' : ''} onClick={() => upd({ deposit_type: t })}>{l}</button>)}</div>
       {b.deposit_type !== 'full' && <label className="cap">{b.deposit_type === 'percent' ? 'มัดจำกี่ % ของราคา' : 'มัดจำกี่บาท'}<input className="input num" inputMode="decimal" value={b.deposit_value ?? ''} onChange={(e) => upd({ deposit_value: Number(e.target.value) || 0 })} /></label>}
+      {b.deposit_type !== 'full' && b.booking_type === 'stay' && <label className="cap">จ่ายส่วนที่เหลือก่อนวันเข้ากี่วัน (เว้นว่าง = จ่ายที่ร้าน · จองใกล้กว่านี้จ่ายเต็ม)<input className="input num" inputMode="numeric" value={b.balance_days ?? ''} onChange={(e) => upd({ balance_days: Number(e.target.value) || null })} /></label>}
       {isOwner && <label className="cap">กันที่รอสลิป (นาที · ทุกธุรกิจ)<input className="input num" inputMode="numeric" value={h} onChange={(e) => setH(Number(e.target.value) || 0)} /></label>}
       <span className="cap">ยกเลิกก่อนวันใช้บริการ</span>
       {rules.map((r, i) => (
@@ -108,9 +109,9 @@ export function Deposit({ biz, hold, isOwner }: { biz: B[]; hold: number; isOwne
       <div style={{ display: 'flex', justifyContent: 'space-between' }}><span className="cap">น้อยกว่า {rules[rules.length - 1]?.days ?? 0} วัน</span><b>ไม่คืน</b></div>
       <button className="btnw line" onClick={() => upd({ cancel_rules: [...rules, { days: Math.max(0, (rules[rules.length - 1]?.days ?? 7) - 1), refund: 0 }] })}>+ เพิ่มขั้น</button>
       <div className="note"><b>ลูกค้าเห็น:</b> {text}</div>
-      <div className="cap">ระบบยังไม่คืนเงินอัตโนมัติ (เฟส 2) · พนักงานกดยกเลิกแล้วโอนคืนตามขั้นนี้</div>
+      <div className="cap">ตอนกดยกเลิก ระบบเสนอยอดคืนตามขั้นนี้ · ร้านเลือกคืนเป็นเครดิต โอนคืน หรือไม่คืน</div>
       <Msg />
-      <button className="btnw dark" disabled={busy} onClick={() => save('deposit.save', { business_code: b.code, deposit_type: b.deposit_type, deposit_value: b.deposit_value, cancel_rules: rules, cancel_policy: text, ...(isOwner ? { hold_minutes: h } : {}) })}>บันทึก</button>
+      <button className="btnw dark" disabled={busy} onClick={() => save('deposit.save', { business_code: b.code, deposit_type: b.deposit_type, deposit_value: b.deposit_value, balance_days: b.balance_days, cancel_rules: rules, cancel_policy: text, ...(isOwner ? { hold_minutes: h } : {}) })}>บันทึก</button>
     </>
   );
 }
