@@ -4,14 +4,6 @@ import { bizLook } from './look';
 export type CardItem = { business: string; color: string | null; type: string; biz: string; title: string; when: string };
 export type Card = { head: string; headColor?: string; title: string; body?: string; items?: CardItem[]; rows?: [string, string][]; button?: { label: string; url: string } };
 
-// ลิงก์เปิดใน LIFF (ต้องตั้ง NEXT_PUBLIC_LIFF_ID) หรือเว็บของร้าน (APP_URL)
-export function liffUrl(path: string): string | null {
-  const id = process.env.NEXT_PUBLIC_LIFF_ID;
-  if (id) return `https://liff.line.me/${id}${path}`;
-  const base = process.env.APP_URL;
-  return base ? base.replace(/\/$/, '') + path : null;
-}
-
 const txt = (text: string, o: Record<string, unknown> = {}) => ({ type: 'text', text: text || ' ', wrap: true, ...o });
 
 export function flexCard(c: Card) {

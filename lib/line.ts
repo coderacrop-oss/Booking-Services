@@ -1,9 +1,10 @@
 import 'server-only';
+import { loginChannelId } from './config';
 
 // LINE Login: ตรวจ ID token จาก LIFF กับ LINE โดยตรง (ไม่เชื่อข้อมูลจากหน้าเว็บ)
 export async function verifyIdToken(idToken: string): Promise<{ sub: string; name: string }> {
-  const client = process.env.LINE_LOGIN_CHANNEL_ID;
-  if (!client) throw new Error('ยังไม่ได้ตั้ง LINE_LOGIN_CHANNEL_ID');
+  const client = await loginChannelId();
+  if (!client) throw new Error('ยังไม่ได้ใส่ LIFF ID หรือ LINE_LOGIN_CHANNEL_ID');
   const r = await fetch('https://api.line.me/oauth2/v2.1/verify', {
     method: 'POST',
     headers: { 'content-type': 'application/x-www-form-urlencoded' },

@@ -161,7 +161,7 @@ export async function applySetting(s: StaffUser, kind: string, d: D) {
     // ---------- ค่าร้าน (เจ้าของ) ----------
     case 'settings.save': {
       owner(s);
-      const ALLOW = ['shop_name', 'legal_name', 'promptpay_id', 'account_name', 'notify_email', 'line_oa_id', 'shop_phone', 'remind_hours_before',
+      const ALLOW = ['liff_id', 'shop_name', 'legal_name', 'promptpay_id', 'account_name', 'notify_email', 'line_oa_id', 'shop_phone', 'remind_hours_before',
         'msg_paid', 'msg_reminder', 'msg_slip_rejected', 'msg_groom_done', 'msg_cancelled', 'msg_vaccine', 'msg_rescheduled'];
       const v = (d.values ?? {}) as D;
       for (const [k, val] of Object.entries(v)) {
@@ -169,6 +169,7 @@ export async function applySetting(s: StaffUser, kind: string, d: D) {
         let x = str(val, 200);
         if (k === 'promptpay_id' && x && !/^(\d{10}|\d{13}|\d{15})$/.test(x.replace(/\D/g, ''))) throw new BookingError('bad', 'เลขพร้อมเพย์ต้องเป็นเบอร์ 10 หลัก หรือเลข 13/15 หลัก');
         if (k === 'promptpay_id') x = x.replace(/\D/g, '');
+        if (k === 'liff_id' && x && !/^\d{6,}-[A-Za-z0-9]{4,}$/.test(x)) throw new BookingError('bad', 'LIFF ID ต้องเป็นรูปแบบ 2001234567-AbCdEfGh');
         if (k.startsWith('msg_')) x = x === 'off' ? 'off' : 'on';
         await sql`insert into settings (key, value) values (${k}, ${x}) on conflict (key) do update set value = excluded.value`;
       }

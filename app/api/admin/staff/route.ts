@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { sql } from '@/lib/db';
 import { currentStaff } from '@/lib/staff';
+import { appUrl, liffId } from '@/lib/config';
 
 export const dynamic = 'force-dynamic';
 
@@ -24,8 +25,8 @@ export async function POST(req: NextRequest) {
   }
   if (b.action === 'invite') {
     const [{ t }] = await sql`select staff_invite(${code}) as t`;
-    const liff = process.env.NEXT_PUBLIC_LIFF_ID;
-    const origin = req.nextUrl.origin;
+    const liff = await liffId();
+    const origin = appUrl() || req.nextUrl.origin;
     // แสดงลิงก์ครั้งเดียว · ฐานข้อมูลเก็บเฉพาะ hash
     return NextResponse.json({ link: liff ? `https://liff.line.me/${liff}/staff/join?t=${t}` : `${origin}/staff/join?t=${t}` });
   }

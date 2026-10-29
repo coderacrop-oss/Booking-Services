@@ -235,5 +235,12 @@ psql "$SUPABASE_DB_URL" -f tests/db_test.sql
   - ราคาเท่าเดิม · ฐานข้อมูลกันทับ/รอบเต็ม/ขนาดไม่ตรง · เช็กวันปิดและเวลาทำงานช่าง
   - ส่ง LINE แจ้งลูกค้า (ปิดได้ที่ ตั้งค่า → ข้อความ LINE) · ตั้งเตือนก่อนวันใหม่ · แก้ event ในปฏิทิน
 - ข้อความ LINE ทุกแบบส่งเป็นการ์ด (Flex) มีแถบสีธุรกิจ รายการ และปุ่มเปิดหน้าการจอง (ข้อความธรรมดาเป็น altText)
-  - ปุ่มใช้ `NEXT_PUBLIC_LIFF_ID` (หรือ `APP_URL` ถ้ายังไม่มี LIFF)
+  - ปุ่มเปิดผ่าน LIFF ถ้ามี LIFF ID ไม่งั้นเปิดเว็บตรง (APP_URL → โดเมน production ของ Vercel ที่ Vercel ใส่ให้เอง)
+
+### LIFF ID ไม่ต้องตั้งใน Vercel ก็ได้
+เจ้าของใส่ที่ หลังบ้าน → ตั้งค่า → รับเงินและข้อมูลร้าน → **LIFF ID** มีผลทันที ไม่ต้อง deploy ใหม่
+- ใช้ทั้งล็อกอินลูกค้า ล็อกอิน/เชิญพนักงาน และปุ่มบนการ์ด LINE
+- `LINE_LOGIN_CHANNEL_ID` ไม่ต้องใส่ ระบบอ่านจากส่วนหน้าของ LIFF ID ให้
+- ถ้าตั้ง `NEXT_PUBLIC_LIFF_ID` ใน env ค่านั้นมาก่อน
+- ปุ่มต่าง ๆ ใช้โดเมน Vercel อัตโนมัติ (`VERCEL_PROJECT_PRODUCTION_URL`) ต้องเปิด "Enable access to System Environment Variables" ใน Vercel (ค่าเริ่มต้นเปิด)
 - ทดสอบ: `./scripts/e2e_reschedule.sh` (14 ข้อ · ใช้ฐานข้อมูลที่เพิ่ง seed)

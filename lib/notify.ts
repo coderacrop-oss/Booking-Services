@@ -5,7 +5,8 @@ import { pushMessage } from './line';
 import { emailReady, sendEmail } from './email';
 import { calendarReady, deleteEvent, eventId, insertEvent, patchEvent } from './gcal';
 import { baht, thDate } from './thaidate';
-import { flexCard, liffUrl, type Card } from './flex';
+import { flexCard, type Card } from './flex';
+import { appLink } from './config';
 
 type Tx = TransactionSql<{}>;
 export type Template = 'paid' | 'slip_rejected' | 'reminder' | 'new_booking' | 'slip_review' | 'cancelled' | 'groom_done' | 'confirm'
@@ -60,7 +61,7 @@ async function lineFor(j: Job): Promise<{ to: string; text: string; card?: Card 
     const ok = j.template === 'vaccine_ok';
     const text = ok ? `${name}: วัคซีนของ${p.name}ผ่านการตรวจแล้ว ✅ จองสระและ Pet hotel ได้เลย`
                     : `${name}: วัคซีนของ${p.name}ยังไม่ผ่าน — ${j.payload.reason ?? ''}\nส่งรูปใหม่ได้ที่เมนู "น้องของฉัน"`;
-    const url = liffUrl(ok ? '/' : `/me/pets/${p.code}`);
+    const url = await appLink(ok ? '/' : `/me/pets/${p.code}`);
     return { to: p.line_user_id, text, card: {
       head: `${name} · สมุดวัคซีน`, headColor: ok ? '#1E7B4A' : '#B8262E',
       title: ok ? `วัคซีนของ${p.name}ผ่านแล้ว` : `วัคซีนของ${p.name}ยังไม่ผ่าน`,
@@ -76,8 +77,9 @@ async function lineFor(j: Job): Promise<{ to: string; text: string; card?: Card 
   if (j.template === 'reminder' && (c.status !== 'paid' || rows.every((r) => r.status !== 'confirmed'))) return 'skip';
   const list = rows.map((r) => `• ${r.biz} ${r.item}${r.pets ? ' · ' + r.pets : ''}\n  ${thDate(r.d)} ${r.t} (${r.code})`).join('\n');
   const items = rows.map((r) => ({ business: r.business_code, color: r.color, type: r.booking_type, biz: `${r.biz} · ${r.code}`, title: `${r.item}${r.pets ? ' · ' + r.pets : ''}`, when: `${thDate(r.d)} · ${r.t}` }));
-  const url = liffUrl(`/me/b/${c.code}`);
-  const btn = (label: string, path?: string) => { const u = path ? liffUrl(path) : url; return u ? { label, url: u } : undefined; };
+  const url = await appLink(`/me/b/${c.code}`);
+  const payUrl = await appLink(`/pay/${c.code}`);
+  const btn = (label: string, path?: string) => { const u = path ? payUrl : url; return u ? { label, url: u } : undefined; };
   const old = typeof j.payload.old === 'string' ? `${thDate(j.payload.old.slice(0, 10))} ${j.payload.old.slice(11, 16)}` : '';
   const T: Partial<Record<Template, [string, Card]>> = {
     paid: [`${name}: ร้านตรวจสลิปแล้ว การจองยืนยันเรียบร้อย ✅\n${list}`,
