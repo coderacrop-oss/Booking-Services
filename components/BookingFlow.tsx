@@ -15,7 +15,7 @@ type Avail<T> = { loading: boolean; error: string | null; data: T | null };
 type UnitAv = { code: string; free: boolean; reason: string | null };
 type SessAv = { code: string; start: string; end: string; size_rule: string; left: number; capacity: number; free: boolean; reason: string | null };
 type SlotAv = { minutes: number; closed: boolean; slots: { start: string; staff: string; staff_name: string }[];
-                grid: { start: string; staff: string | null; staff_name: string | null; free: { staff: string; staff_name: string }[] }[] };
+                grid: { start: string; staff: string | null; staff_name: string | null; free: { staff: string; staff_name: string }[]; pet_busy?: boolean }[] };
 type MonthAv = {
   today: string; last: string; until: string;
   days: Record<string, { closed: boolean; reason: string | null }>;
@@ -106,7 +106,7 @@ export default function BookingFlow({ cat, pets, loggedIn, today, initial, credi
   const sessAv = useFetch<{ sessions: SessAv[] }>(step === 'session' && date
     ? `/api/availability?type=session&biz=${b.code}&date=${date}&kg=${chosenPets.map((p) => p.weight_kg).join(',')}` : null);
   const slotAv = useFetch<SlotAv>(step === 'slot' && service && date
-    ? `/api/availability?type=slot&biz=${b.code}&date=${date}&service=${service}&addons=${addons.join(',')}&tier=${pet?.tier_code ?? ''}` : null);
+    ? `/api/availability?type=slot&biz=${b.code}&date=${date}&service=${service}&addons=${addons.join(',')}&tier=${pet?.tier_code ?? ''}${pet ? `&pets=${pet.code}` : ''}` : null);
 
   // ---------- ปฏิทิน ----------
   const unitSets = useMemo(() => (M?.units ?? []).map((u) => ({ ...u, B: new Set([...u.busy, ...u.off]) })), [M]);
@@ -435,7 +435,7 @@ export default function BookingFlow({ cat, pets, loggedIn, today, initial, credi
               return (
                 <button key={x.start} className={'chip' + (time === x.start ? ' on' : '') + (n ? '' : ' full')} disabled={!n}
                   onClick={() => { setTime(x.start); setSlot(n === 1 ? { start: x.start, ...x.free[0] } : null); }}>
-                  <b className="num">{x.start}</b><small>{n ? `ว่าง ${n} ช่าง` : 'เต็ม'}</small>
+                  <b className="num">{x.start}</b><small>{n ? `ว่าง ${n} ช่าง` : x.pet_busy ? 'น้องมีคิวแล้ว' : 'เต็ม'}</small>
                 </button>
               );
             })}

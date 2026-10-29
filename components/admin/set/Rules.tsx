@@ -5,7 +5,7 @@ import { bizLook } from '@/lib/look';
 import { DAYS, DayPick, Switch, useSave } from './util';
 
 type B = { code: string; name: string; color: string | null; booking_type: string; open_hours: string | null; closed_weekdays: number[];
-  checkin_time: string | null; checkout_time: string | null; deposit_type: string; deposit_value: number | null; balance_days: number | null; cancel_rules: { days: number; refund: number }[]; cancel_policy: string };
+  checkin_time: string | null; checkout_time: string | null; deposit_type: string; deposit_value: number | null; balance_days: number | null; guide: string | null; cancel_rules: { days: number; refund: number }[]; cancel_policy: string };
 type C = { id: number; business_code: string; unit_code: string | null; session_code: string | null; date_from: string; date_to: string; reason: string | null; item: string | null };
 
 // ---------- เวลาเปิดและวันหยุด ----------
@@ -109,9 +109,11 @@ export function Deposit({ biz, hold, isOwner }: { biz: B[]; hold: number; isOwne
       <div style={{ display: 'flex', justifyContent: 'space-between' }}><span className="cap">น้อยกว่า {rules[rules.length - 1]?.days ?? 0} วัน</span><b>ไม่คืน</b></div>
       <button className="btnw line" onClick={() => upd({ cancel_rules: [...rules, { days: Math.max(0, (rules[rules.length - 1]?.days ?? 7) - 1), refund: 0 }] })}>+ เพิ่มขั้น</button>
       <div className="note"><b>ลูกค้าเห็น:</b> {text}</div>
+      <label className="cap">{b.booking_type === 'slot' ? 'เตรียมน้องก่อนมา' : 'กฎและสิ่งที่ต้องเตรียม'} (ปุ่มที่ 2 ของริชเมนู · ขึ้นบรรทัดใหม่ได้)
+        <textarea className="input" rows={4} value={b.guide ?? ''} onChange={(e) => upd({ guide: e.target.value })} /></label>
       <div className="cap">ตอนกดยกเลิก ระบบเสนอยอดคืนตามขั้นนี้ · ร้านเลือกคืนเป็นเครดิต โอนคืน หรือไม่คืน</div>
       <Msg />
-      <button className="btnw dark" disabled={busy} onClick={() => save('deposit.save', { business_code: b.code, deposit_type: b.deposit_type, deposit_value: b.deposit_value, balance_days: b.balance_days, cancel_rules: rules, cancel_policy: text, ...(isOwner ? { hold_minutes: h } : {}) })}>บันทึก</button>
+      <button className="btnw dark" disabled={busy} onClick={() => save('deposit.save', { business_code: b.code, deposit_type: b.deposit_type, deposit_value: b.deposit_value, balance_days: b.balance_days, guide: b.guide, cancel_rules: rules, cancel_policy: text, ...(isOwner ? { hold_minutes: h } : {}) })}>บันทึก</button>
     </>
   );
 }

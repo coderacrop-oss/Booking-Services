@@ -184,6 +184,8 @@ export async function applySetting(s: StaffUser, kind: string, d: D) {
         .map((r) => ({ days: int(r.days, 0, 365) ?? 0, refund: int(r.refund, 0, 100) ?? 0 })).sort((a, b) => b.days - a.days).slice(0, 6);
       const text = str(d.cancel_policy, 400) || policyText(rules);
       const bd = type === 'full' || !d.balance_days ? null : Math.min(60, Math.max(1, Math.round(Number(d.balance_days)) || 0)) || null;
+      const guide = d.guide === undefined ? undefined : (str(d.guide, 2000) || null);
+      if (guide !== undefined) await sql`update businesses set guide = ${guide} where code = ${biz}`;
       await sql`update businesses set deposit_type = ${type}, deposit_value = ${val}, balance_days = ${bd}, cancel_rules = ${sql.json(rules)}, cancel_policy = ${text} where code = ${biz}`;
       if (d.hold_minutes !== undefined) { owner(s); const h = int(d.hold_minutes, 5, 1440) ?? 30; await sql`update settings set value = ${String(h)} where key = 'hold_minutes'`; }
       return {};

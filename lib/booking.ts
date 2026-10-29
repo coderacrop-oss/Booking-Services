@@ -149,7 +149,7 @@ export async function groomMinutes(bizCode: string, service: string, addons: str
   return d.mins + d.addons.reduce((a, x) => a + x.mins, 0);
 }
 
-export async function slotAvailability(bizCode: string, date: string, service: string, addons: string[], tier: string | null) {
+export async function slotAvailability(bizCode: string, date: string, service: string, addons: string[], tier: string | null, pets: string[] = []) {
   const b = await business(bizCode);
   if (b.booking_type !== 'slot') throw new BookingError('wrong_type', 'ธุรกิจนี้ไม่ใช่การจองแบบช่องเวลา');
   const total = await groomMinutes(bizCode, service, addons, tier);
@@ -176,11 +176,19 @@ export async function slotAvailability(bizCode: string, date: string, service: s
       byTime.set(k, [...(byTime.get(k) ?? []), { start: k, staff: g.code, staff_name: g.display_name }]);
     }
   }
+  // น้องที่เลือกมีคิว Grooming อื่นวันนี้แล้ว → เวลาที่ทับกันไม่ให้เลือก
+  const petBusy = pets.length ? (await sql`
+    select to_char(k.start_at at time zone 'Asia/Bangkok', 'HH24:MI') as a, to_char(k.end_at at time zone 'Asia/Bangkok', 'HH24:MI') as z
+    from bookings k join booking_pets bp on bp.booking_code = k.code
+    where k.kind = 'slot' and k.status in ${sql(ACTIVE)} and bp.pet_code in ${sql(pets)}
+      and (k.start_at at time zone 'Asia/Bangkok')::date = ${date}::date`).map((x) => [toMin(x.a), toMin(x.z)] as [number, number]) : [];
+  const clash = (m: number) => petBusy.some(([a, z]) => m < z && m + total > a);
+  for (const k of [...byTime.keys()]) if (clash(toMin(k))) byTime.delete(k);
   const slots = [...byTime.values()].map((x) => x[0]).sort((a, z) => a.start.localeCompare(z.start));
   const grid = [...all].sort((a, z) => a - z).map((m) => {
     const free = byTime.get(fromMin(m)) ?? [];
     return { start: fromMin(m), staff: free[0]?.staff ?? null, staff_name: free[0]?.staff_name ?? null,
-             free: free.map((f) => ({ staff: f.staff, staff_name: f.staff_name })) };
+             free: free.map((f) => ({ staff: f.staff, staff_name: f.staff_name })), ...(clash(m) ? { pet_busy: true } : {}) };
   });
   return { minutes: total, slots, grid, closed: false };
 }

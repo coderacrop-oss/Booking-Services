@@ -8,7 +8,7 @@ import { bizLook } from '@/lib/look';
 // วันให้เลือกเฉพาะวันในทริป · ราคาคิดจาก server (/api/quote) เสมอ
 export type Addon = { key: string; business: string; name: string; items: CartItem[]; title: string; when: string; price: number };
 type Main = { kind: 'stay' | 'session' | 'slot'; from: string; to: string; date: string; nights: number; isVilla: boolean };
-type Grid = { start: string; free: { staff: string; staff_name: string }[] }[];
+type Grid = { start: string; free: { staff: string; staff_name: string }[]; pet_busy?: boolean }[];
 type SlotAv = { minutes: number; closed: boolean; grid: Grid };
 type SessAv = { code: string; start: string; end: string; left: number; free: boolean; reason: string | null };
 type UnitAv = { code: string; free: boolean; reason: string | null };
@@ -113,7 +113,7 @@ function AddonForm({ k, offer, pets, main, initial, onDone, onCancel }:
     setErr('');
     if (type === 'slot' && service && first) {
       setSlots(null);
-      j<SlotAv>(`/api/availability?type=slot&biz=${offer.offer_business}&date=${date}&service=${service}&addons=&tier=${first.tier_code ?? ''}`)
+      j<SlotAv>(`/api/availability?type=slot&biz=${offer.offer_business}&date=${date}&service=${service}&addons=&tier=${first.tier_code ?? ''}&pets=${chosen.map((p) => p.code).join(',')}`)
         .then((x) => {
           setSlots(x);
           // เวลาแรกที่มีช่างว่าง
@@ -160,7 +160,7 @@ function AddonForm({ k, offer, pets, main, initial, onDone, onCancel }:
         // น้องหลายตัว: ช่างคนเดียวกัน ต่อคิวกันไปตามเวลาที่ว่างถัดไป
         let cursor = toMin(time!);
         for (const p of chosen) {
-          const av = await j<SlotAv>(`/api/availability?type=slot&biz=${offer.offer_business}&date=${date}&service=${service}&addons=&tier=${p.tier_code ?? ''}`);
+          const av = await j<SlotAv>(`/api/availability?type=slot&biz=${offer.offer_business}&date=${date}&service=${service}&addons=&tier=${p.tier_code ?? ''}&pets=${p.code}`);
           const g = av.grid.find((x) => toMin(x.start) >= cursor && x.free.some((f) => f.staff === staff!.staff));
           if (!g) throw new Error(`พี่${staff!.staff_name}ไม่ว่างต่อสำหรับ${p.name} · เลือกเวลาหรือช่างอื่น`);
           items.push({ business: offer.offer_business, kind: 'slot', service: service!, addons: [], staff: staff!.staff, start: `${date}T${g.start}`, pet: p.code });
@@ -206,7 +206,7 @@ function AddonForm({ k, offer, pets, main, initial, onDone, onCancel }:
         <div className="times">{slots?.grid.map((g) => (
           <button key={g.start} className={'chip' + (time === g.start ? ' on' : '') + (g.free.length ? '' : ' full')} disabled={!g.free.length}
             onClick={() => { setTime(g.start); setStaff(g.free.length === 1 ? g.free[0] : null); }}>
-            <b className="num">{g.start}</b><small>{g.free.length ? `ว่าง ${g.free.length} ช่าง` : 'เต็ม'}</small></button>))}</div>
+            <b className="num">{g.start}</b><small>{g.free.length ? `ว่าง ${g.free.length} ช่าง` : g.pet_busy ? 'น้องมีคิวแล้ว' : 'เต็ม'}</small></button>))}</div>
         <div className="cap">ช่างที่ว่าง{time ? ` · ${time}` : ''}</div>
         {!time && <div className="sub" style={{ color: 'var(--red-ink)' }}>เลือกเวลาก่อน</div>}
         {time && <div className="chips">{(slots?.grid.find((g) => g.start === time)?.free ?? []).map((f) => (
