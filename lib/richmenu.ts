@@ -5,6 +5,15 @@ import { appUrl, liffId } from './config';
 // ภาพ 2500×1686 อยู่ที่ public/richmenu/<biz>.jpg
 // ผัง: แถบบน 4 ช่อง (สูง 270) · ซ้าย = จองเลย · ขวา 2×2 = ราคา · กฎ · การจองของฉัน · ติดต่อเจ้าหน้าที่
 export const RM_TABS = ['pool', 'grooming', 'pet_hotel', 'villa'] as const;
+// ปุ่มข้อมูล 2 ปุ่ม: ส่งคีย์เวิร์ดเข้าแชท → ตั้ง "ข้อความตอบกลับอัตโนมัติ" ใน LINE OA Manager ให้ตอบเป็นรูป
+// คีย์เวิร์ดต้องพิมพ์ใน OA Manager ให้ตรงตัวอักษร
+export const RM_KEYWORDS: Record<string, [string, string]> = {
+  pool: ['รอบและราคาสระ', 'กฎสระ'],
+  grooming: ['ราคาตามน้ำหนัก', 'เตรียมน้องก่อนมา'],
+  pet_hotel: ['ห้องและราคา Pet Hotel', 'เงื่อนไขรับฝาก'],
+  villa: ['ดูบ้านทั้งหมด', 'กฎบ้าน'],
+};
+export const RM_CONTACT = 'ติดต่อเจ้าหน้าที่';
 const NAME = 'BaanMax · ';
 const alias = (biz: string) => `baanmax-${biz.replace('_', '-')}`;
 const API = () => process.env.LINE_API_BASE || 'https://api.line.me';
@@ -32,10 +41,10 @@ function menu(biz: string, link: (p: string) => string) {
     areas: [
       ...RM_TABS.map((t, i) => area(i * 625, 0, 625, 270, { type: 'richmenuswitch', richMenuAliasId: alias(t), data: `tab=${t}` })),
       area(0, 270, 1250, 1416, { type: 'uri', label: 'จองเลย', uri: link(`/b/${biz}`) }),
-      area(1250, 270, 625, 714, { type: 'uri', label: 'ราคา', uri: link(`/b/${biz}/info?tab=price`) }),
-      area(1875, 270, 625, 714, { type: 'uri', label: 'กฎ', uri: link(`/b/${biz}/info?tab=rules`) }),
+      area(1250, 270, 625, 714, { type: 'message', label: 'ราคา', text: RM_KEYWORDS[biz][0] }),
+      area(1875, 270, 625, 714, { type: 'message', label: 'กฎ', text: RM_KEYWORDS[biz][1] }),
       area(1250, 984, 625, 702, { type: 'uri', label: 'การจองของฉัน', uri: link('/me') }),
-      area(1875, 984, 625, 702, { type: 'message', label: 'ติดต่อเจ้าหน้าที่', text: 'ติดต่อเจ้าหน้าที่' }),
+      area(1875, 984, 625, 702, { type: 'message', label: 'ติดต่อเจ้าหน้าที่', text: RM_CONTACT }),
     ],
   };
 }

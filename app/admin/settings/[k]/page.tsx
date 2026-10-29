@@ -10,6 +10,7 @@ import { Deposit, Hours, Messages, PaySettings, Xsell } from '@/components/admin
 import StaffAdmin from '@/components/StaffAdmin';
 import Connect from '@/components/admin/set/Connect';
 import RichMenu from '@/components/admin/set/RichMenu';
+import { RM_CONTACT, RM_KEYWORDS } from '@/lib/richmenu';
 import { liffId } from '@/lib/config';
 import { services } from '@/lib/connect';
 
@@ -100,7 +101,7 @@ export default async function SettingPage({ params }: { params: Promise<{ k: str
     const v = Object.fromEntries(rows.map((r) => [r.key, r.value]));
     body = <Connect svcs={svcs} biz={[...cals] as never}
       ocr={{ on: v.ocr_enabled !== 'off', limit: v.ocr_month_limit ?? '1000', used: Number(v['ocr_used_' + ym] ?? 0) }} />;
-    if (s.role === 'owner') body = <>{body}<RichMenu ready={!!process.env.LINE_CHANNEL_ACCESS_TOKEN && !!(await liffId())} /></>;
+    if (s.role === 'owner') body = <>{body}<RichMenu ready={!!process.env.LINE_CHANNEL_ACCESS_TOKEN && !!(await liffId())} liff={await liffId()} keywords={[...Object.values(RM_KEYWORDS).flat(), RM_CONTACT]} /></>;
   }
   return (
     <>
