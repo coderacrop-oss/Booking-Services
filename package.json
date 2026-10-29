@@ -4,11 +4,12 @@
   "version": "0.2.0",
   "scripts": {
     "dev": "next dev -p 3000",
-    "build": "next build",
+    "build": "node scripts/migrate.mjs --if-vercel && next build",
     "start": "next start -p 3000",
     "typecheck": "tsc --noEmit",
     "seed": "python3 scripts/excel_to_seed.py data/BaanMax-booking-schema.xlsx > supabase/seed.sql",
-    "test:db": "./scripts/test_db.sh"
+    "test:db": "./scripts/test_db.sh",
+    "db:migrate": "node scripts/migrate.mjs"
   },
   "dependencies": {
     "@line/liff": "2.31.1",

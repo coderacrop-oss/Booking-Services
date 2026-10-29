@@ -10,3 +10,4 @@ __pycache__/
 ~$*.xlsx
 *.tsbuildinfo
 .uploads/
+env.vercel.txt
