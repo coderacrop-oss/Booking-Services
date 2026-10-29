@@ -1,3 +1,4 @@
+import Empty from '@/components/Empty';
 import Link from 'next/link';
 import { Fragment } from 'react';
 import { notFound } from 'next/navigation';
@@ -78,7 +79,7 @@ export default async function Biz({ params, searchParams }: { params: Promise<{ 
         ))}
       </>}
       <div className="grp">ที่ยืนยันแล้ว<span>{rows.length} รายการวันนี้</span></div>
-      {!rows.length && <div className="note">ไม่มีการจองวันนี้</div>}
+      {!rows.length && <Empty icon="event" title="ยังไม่มีการจองที่ยืนยันแล้ว" text="การจองที่รอตรวจสลิปอยู่ในแท็บสลิป · ผ่านแล้วจะย้ายมาที่นี่" />}
       <div>
         {rows.map((r) => { const a = nextAction(r); return (
           <Link key={r.code + r.phase} href={`/admin/b/${r.order_code}`} className="row">

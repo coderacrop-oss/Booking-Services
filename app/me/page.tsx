@@ -3,6 +3,7 @@ import { myOrders } from '@/lib/orders';
 import { baht, thDate } from '@/lib/thaidate';
 import { ORDER_ST, Pill } from '@/lib/status';
 import { CustScreen, requireCustomer } from '@/components/cust/Gate';
+import Empty from '@/components/Empty';
 
 export const dynamic = 'force-dynamic';
 
@@ -14,11 +15,7 @@ export default async function MyBookings() {
   return (
     <CustScreen>
       <div className="title">การจองของฉัน</div>
-      {!orders.length && (
-        <Link href="/" className="note" style={{ border: '1.5px dashed var(--line)', background: 'none', textAlign: 'center', padding: 22 }}>
-          ยังไม่มีการจอง<br />กลับไปหน้าบริการเพื่อเริ่มจอง
-        </Link>
-      )}
+      {!orders.length && <Empty icon="receipt_long" title="ยังไม่มีการจอง" text="จองที่พัก สระ หรือ Grooming ให้น้องได้เลย การจองทั้งหมดจะอยู่ที่นี่" action={{ label: 'จองบริการ', href: '/' }} />}
       {orders.map((o) => (
         <Link key={o.code} href={`/me/b/${o.code}`} className="card" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 6 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center' }}>
@@ -30,7 +27,7 @@ export default async function MyBookings() {
               <small>{i.biz} · {thDate(i.s.slice(0, 10))} {i.s.slice(11)}</small>
             </span>
           ))}
-          <small className="num" style={{ fontWeight: 700 }}>รวม {baht(o.total)}{o.status === 'holding' ? ` · ต้องโอน ${baht(o.due_now)}` : ''}</small>
+          <small className="num" style={{ fontWeight: 700 }}>รวม {baht(o.total)}{o.status === 'holding' ? ` · ต้องโอน ${baht(o.due_now - Number(o.paid_amount))}` : ''}{o.status === 'paid' && Number(o.balance_due) > 0 ? ` · ค้างชำระ ${baht(Number(o.balance_due))}` : ''}</small>
         </Link>
       ))}
     </CustScreen>

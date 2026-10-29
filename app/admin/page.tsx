@@ -1,3 +1,4 @@
+import Empty from '@/components/Empty';
 import Link from 'next/link';
 import { sql } from '@/lib/db';
 import { currentStaff } from '@/lib/staff';
@@ -59,7 +60,7 @@ export default async function Today({ searchParams }: { searchParams: Promise<{ 
       </div>
 
       <div className="grp">ต่อจากนี้<span>{todo.length} รายการ</span></div>
-      {!todo.length && <div className="note">ไม่มีงานค้างวันนี้</div>}
+      {!todo.length && <Empty tone="green" icon="task_alt" title="ไม่มีงานค้างวันนี้" text="เช็กอิน รับกลับ และคิวที่ต้องทำจะขึ้นที่นี่ตามเวลา" />}
       <div>
         {todo.map((r) => { const L = look(r); const a = nextAction(r); return (
           <Link key={r.code + r.phase} href={`/admin/b/${r.order_code}`} className="row">

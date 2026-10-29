@@ -155,7 +155,7 @@ export async function slotAvailability(bizCode: string, date: string, service: s
   const total = await groomMinutes(bizCode, service, addons, tier);
   type Slot = { start: string; staff: string; staff_name: string };
   const [{ closed }] = await sql`select is_closed(${bizCode}, null, null, ${date}::date) as closed`;
-  if (closed) return { minutes: total, slots: [] as Slot[], grid: [] as { start: string; staff: string | null; staff_name: string | null }[], closed: true };
+  if (closed) return { minutes: total, slots: [] as Slot[], grid: [] as { start: string; staff: string | null; staff_name: string | null; free: { staff: string; staff_name: string }[] }[], closed: true };
 
   const dow = isoDow(date);
   const working = (await groomers(bizCode)).filter((g) => g.work_days.includes(dow));
@@ -164,7 +164,7 @@ export async function slotAvailability(bizCode: string, date: string, service: s
     from bookings where kind = 'slot' and status in ${sql(ACTIVE)} and staff_code in ${sql(working.map((g) => g.code))}
       and (start_at at time zone 'Asia/Bangkok')::date = ${date}::date` : [];
   const nowMin = leadNow(date);
-  const byTime = new Map<string, Slot>();
+  const byTime = new Map<string, Slot[]>();       // เวลา → ช่างที่ว่างทุกคน
   const all = new Set<number>();
   for (const g of working) {
     const mine = bk.filter((x) => x.staff_code === g.code);
@@ -173,13 +173,14 @@ export async function slotAvailability(bizCode: string, date: string, service: s
     const busy = mine.map((x) => [toMin(x.a), toMin(x.z)] as [number, number]);
     for (const m of groomerStarts(g, busy, total, nowMin)) {
       const k = fromMin(m);
-      if (!byTime.has(k)) byTime.set(k, { start: k, staff: g.code, staff_name: g.display_name });
+      byTime.set(k, [...(byTime.get(k) ?? []), { start: k, staff: g.code, staff_name: g.display_name }]);
     }
   }
-  const slots = [...byTime.values()].sort((a, z) => a.start.localeCompare(z.start));
+  const slots = [...byTime.values()].map((x) => x[0]).sort((a, z) => a.start.localeCompare(z.start));
   const grid = [...all].sort((a, z) => a - z).map((m) => {
-    const s = byTime.get(fromMin(m));
-    return { start: fromMin(m), staff: s?.staff ?? null, staff_name: s?.staff_name ?? null };
+    const free = byTime.get(fromMin(m)) ?? [];
+    return { start: fromMin(m), staff: free[0]?.staff ?? null, staff_name: free[0]?.staff_name ?? null,
+             free: free.map((f) => ({ staff: f.staff, staff_name: f.staff_name })) };
   });
   return { minutes: total, slots, grid, closed: false };
 }
