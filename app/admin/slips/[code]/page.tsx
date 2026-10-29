@@ -37,8 +37,20 @@ export default async function Slip({ params }: { params: Promise<{ code: string 
           {account && <span className="cap">บัญชีรับ: {account}</span>}
         </div>
       </div>
+      {(() => {
+        const c = (p.checks ?? {}) as { flags?: string[]; ok?: string[]; ocr?: string };
+        if (!c.flags && !c.ok) return null;
+        return (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <div className="cap">ระบบตรวจเบื้องต้น{c.ocr === 'vision' ? ' (อ่านด้วย Google Vision)' : ''} · ยังต้องเห็นเงินเข้าในแอปธนาคารก่อนกดผ่าน</div>
+            {(c.flags ?? []).map((f, k) => <div key={'f' + k} className="err">{f}</div>)}
+            {(c.ok ?? []).length > 0 && <div className="note">✓ {(c.ok ?? []).join(' · ')}</div>}
+            {p.slip_ref && <div className="cap">เลขอ้างอิงสลิป {p.slip_ref}</div>}
+          </div>
+        );
+      })()}
       {p.status !== 'pending' ? <div className="note">ตรวจแล้ว: {p.status === 'approved' ? 'ผ่าน' : `ไม่ผ่าน · ${p.reject_reason}`}</div>
-        : <SlipDecision code={p.code} due={Number(p.amount_due)} slip={p.amount_slip === null ? null : Number(p.amount_slip)} />}
+        : <SlipDecision code={p.code} due={Number(p.amount_due)} slip={p.amount_slip !== null ? Number(p.amount_slip) : p.ocr_amount !== null ? Number(p.ocr_amount) : null} />}
     </>
   );
 }

@@ -4,6 +4,7 @@ import { BookingError, quote } from './booking';
 import { enqueue, sendDue } from './notify';
 import { imageType, putFile } from './storage';
 import { todayTH } from './thaidate';
+import { checkSlip } from './slip';
 import { canSee, type StaffUser } from './staff';
 import type { CartItem, OrderView } from './types';
 
@@ -35,90 +36,108 @@ export async function createOrder(customer: string, items: CartItem[], acceptedP
   const free = q.due_now === 0;
   try {
     return await sql.begin(async (tx) => {
-      const [{ code }] = await tx`select next_code('T', ${todayTH()}::date) as code`;
-      await tx`insert into orders (code, customer_code, status, total, due_now, hold_until, policy_version, paid_at)
-               values (${code}, ${customer}, ${free ? 'paid' : 'holding'}, ${q.total}, ${q.due_now},
-                       ${free ? null : tx`now() + make_interval(mins => ${hold})`}, ${policy}, ${free ? tx`now()` : null})`;
-      const codes: string[] = [];
-      for (let i = 0; i < items.length; i++) {
-        const it = items[i], qi = q.items[i];
-        const [{ bk }] = await tx`select next_code(b.id_prefix, (${qi.start_at}::timestamptz at time zone 'Asia/Bangkok')::date) as bk
-                                  from businesses b where b.code = ${it.business}`;
-        const row = {
-          code: bk, order_code: code, business_code: it.business, kind: it.kind,
-          unit_code: it.kind === 'stay' ? it.unit : null,
-          session_code: it.kind === 'session' ? it.session : null,
-          service_code: it.kind === 'slot' ? it.service : null,
-          addon_codes: it.kind === 'slot' ? it.addons : [],
-          staff_code: it.kind === 'slot' ? it.staff : null,
-          start_at: qi.start_at, end_at: qi.end_at,
-          guests: it.kind === 'stay' ? it.guests ?? null : null,
-          price: qi.price, status: free ? 'confirmed' : 'holding',
-        };
-        await tx`insert into bookings ${tx(row)}`;
-        const pets = it.kind === 'slot' ? [it.pet] : it.pets;
-        for (const p of pets) await tx`insert into booking_pets (booking_code, pet_code) values (${bk}, ${p})`;
-        codes.push(bk);
-      }
-      await enqueue(tx, { order: code, channel: 'email', template: 'new_booking' });
-      if (free) for (const bk of codes) await enqueue(tx, { booking: bk, channel: 'calendar', template: 'confirm' });
-      return { order: code as string, bookings: codes, due_now: q.due_now, total: q.total, paid: free };
+        const [{ code }] = await tx`select next_code('T', ${todayTH()}::date) as code`;
+        await tx`insert into orders (code, customer_code, status, total, due_now, hold_until, policy_version, paid_at)
+                 values (${code}, ${customer}, ${free ? 'paid' : 'holding'}, ${q.total}, ${q.due_now},
+                         ${free ? null : tx`now() + make_interval(mins => ${hold})`}, ${policy}, ${free ? tx`now()` : null})`;
+        const codes: string[] = [];
+        for (let i = 0; i < items.length; i++) {
+          const it = items[i], qi = q.items[i];
+          const [{ bk }] = await tx`select next_code(b.id_prefix, (${qi.start_at}::timestamptz at time zone 'Asia/Bangkok')::date) as bk
+                                    from businesses b where b.code = ${it.business}`;
+          const row = {
+            code: bk, order_code: code, business_code: it.business, kind: it.kind,
+            unit_code: it.kind === 'stay' ? it.unit : null,
+            session_code: it.kind === 'session' ? it.session : null,
+            service_code: it.kind === 'slot' ? it.service : null,
+            addon_codes: it.kind === 'slot' ? it.addons : [],
+            staff_code: it.kind === 'slot' ? it.staff : null,
+            start_at: qi.start_at, end_at: qi.end_at,
+            guests: it.kind === 'stay' ? it.guests ?? null : null,
+            price: qi.price, status: free ? 'confirmed' : 'holding',
+          };
+          await tx`insert into bookings ${tx(row)}`;
+          const pets = it.kind === 'slot' ? [it.pet] : it.pets;
+          for (const p of pets) await tx`insert into booking_pets (booking_code, pet_code) values (${bk}, ${p})`;
+          codes.push(bk);
+        }
+        await enqueue(tx, { order: code, channel: 'email', template: 'new_booking' });
+        if (free) for (const bk of codes) await enqueue(tx, { booking: bk, channel: 'calendar', template: 'confirm' });
+        return { order: code as string, bookings: codes, due_now: q.due_now, total: q.total, paid: free };
+      });
+    } catch (e) {
+      dbError(e);
+    }
+  }
+  
+  // ---------- ทริปของลูกค้า ----------
+  export async function getOrder(customer: string, code: string): Promise<OrderView | null> {
+    const [o] = await sql`
+      select code, status, total, due_now, to_char(hold_until at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as hold_until,
+             (status = 'holding' and hold_until < now()) as late,
+             (select json_build_object('status', p.status, 'reason', p.reject_reason) from payments p
+               where p.order_code = o.code order by p.created_at desc limit 1) as last_payment
+      from orders o where o.code = ${code} and o.customer_code = ${customer}`;
+    if (!o) return null;
+    const items = await sql`
+      select k.code, k.business_code, b.name as biz, k.status, k.price,
+             to_char(k.start_at at time zone 'Asia/Bangkok', 'YYYY-MM-DD HH24:MI') as s,
+             to_char(k.end_at at time zone 'Asia/Bangkok', 'YYYY-MM-DD HH24:MI') as e,
+             coalesce(u.name, sv.name, '') as item,
+             coalesce((select string_agg(p.name, ', ') from booking_pets bp join pets p on p.code = bp.pet_code where bp.booking_code = k.code), '') as pets
+      from bookings k join businesses b on b.code = k.business_code
+      left join units u on u.code = k.unit_code left join services sv on sv.code = k.service_code
+      where k.order_code = ${code} order by k.start_at`;
+    return { ...o, items: [...items] } as unknown as OrderView;
+  }
+  
+  export async function myOrders(customer: string) {
+    await sql`select expire_holds()`;
+    const rows = await sql`select code from orders where customer_code = ${customer} order by created_at desc limit 30`;
+    return (await Promise.all(rows.map((r) => getOrder(customer, r.code)))).filter((x): x is OrderView => !!x);
+  }
+  
+  // ---------- แนบสลิป ----------
+  export async function attachSlip(customer: string, code: string, file: Buffer) {
+    if (file.length > 5 * 1024 * 1024) throw new BookingError('too_big', 'รูปใหญ่เกิน 5 MB');
+    const type = imageType(file);
+    if (!type) throw new BookingError('not_image', 'แนบได้เฉพาะรูป JPG PNG หรือ WEBP');
+    await sql`select expire_holds()`;
+    const [o] = await sql`select code, status, due_now, created_at, slip_dup_count from orders where code = ${code} and customer_code = ${customer}`;
+    if (!o) throw new BookingError('not_found', 'ไม่พบการจองนี้');
+    if (o.status === 'expired') throw new BookingError('expired', 'หมดเวลากันที่แล้ว จองใหม่อีกครั้ง');
+    if (o.status !== 'holding') throw new BookingError('bad_status', 'การจองนี้แนบสลิปแล้ว');
+  
+    // คัดกรองก่อนรับ: ไม่ใช่สลิป / สลิปซ้ำ = ไม่รับ ไม่แจ้งร้าน (นับครั้งไว้บอกร้านตอนส่งสลิปที่ผ่าน)
+    const [account, promptpay] = await Promise.all([setting('account_name', ''), setting('promptpay_id', '')]);
+    const chk = await checkSlip(file, { due: Number(o.due_now), createdAt: new Date(o.created_at), account, promptpay });
+    if (chk.verdict !== 'review') {
+      await sql`update orders set slip_dup_count = slip_dup_count + 1 where code = ${code}`;
+      throw new BookingError(chk.verdict === 'duplicate' ? 'slip_duplicate' : 'not_slip', chk.message || 'แนบสลิปไม่สำเร็จ');
+    }
+    if (o.slip_dup_count > 0) chk.flags.push(`ลูกค้าเคยส่งรูปที่ไม่ผ่าน/สลิปซ้ำ ${o.slip_dup_count} ครั้ง`);
+    const ext = type.split('/')[1];
+    const path = `${code}/${Date.now()}.${ext}`;
+    await putFile('slips', path, file, type);
+    try {
+      return await sql.begin(async (tx) => {
+      // ล็อกทริปไว้ กันกดแนบซ้ำพร้อมกัน
+      const [cur] = await tx`select status from orders where code = ${code} for update`;
+      if (cur.status !== 'holding') throw new BookingError('bad_status', 'การจองนี้แนบสลิปแล้ว');
+      const [{ pc }] = await tx`select next_code('PAY') as pc`;
+      await tx`insert into payments (code, order_code, amount_due, slip_file, slip_ref, slip_hash, ocr_amount, checks)
+               values (${pc}, ${code}, ${o.due_now}, ${path}, ${chk.ref}, ${chk.hash}, ${chk.amount},
+                       ${tx.json({ flags: chk.flags, ok: chk.ok, ocr: chk.ocr })})`;
+      await tx`update orders set status = 'pending_review' where code = ${code}`;
+      await enqueue(tx, { order: code, channel: 'email', template: 'slip_review' });
+      return { payment: pc as string };
     });
   } catch (e) {
-    dbError(e);
+    // ส่งสลิปเดียวกันพร้อมกันสองทริป → ฐานข้อมูลกันซ้ำให้
+    if ((e as { code?: string }).code === '23505' && /payments_slip_(ref|hash)/.test(String((e as { constraint_name?: string }).constraint_name ?? (e as Error).message)))
+      throw new BookingError('slip_duplicate', 'สลิปนี้เคยใช้แล้ว · แนบสลิปของการโอนครั้งนี้');
+    throw e;
   }
-}
-
-// ---------- ทริปของลูกค้า ----------
-export async function getOrder(customer: string, code: string): Promise<OrderView | null> {
-  const [o] = await sql`
-    select code, status, total, due_now, to_char(hold_until at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as hold_until,
-           (status = 'holding' and hold_until < now()) as late,
-           (select json_build_object('status', p.status, 'reason', p.reject_reason) from payments p
-             where p.order_code = o.code order by p.created_at desc limit 1) as last_payment
-    from orders o where o.code = ${code} and o.customer_code = ${customer}`;
-  if (!o) return null;
-  const items = await sql`
-    select k.code, k.business_code, b.name as biz, k.status, k.price,
-           to_char(k.start_at at time zone 'Asia/Bangkok', 'YYYY-MM-DD HH24:MI') as s,
-           to_char(k.end_at at time zone 'Asia/Bangkok', 'YYYY-MM-DD HH24:MI') as e,
-           coalesce(u.name, sv.name, '') as item,
-           coalesce((select string_agg(p.name, ', ') from booking_pets bp join pets p on p.code = bp.pet_code where bp.booking_code = k.code), '') as pets
-    from bookings k join businesses b on b.code = k.business_code
-    left join units u on u.code = k.unit_code left join services sv on sv.code = k.service_code
-    where k.order_code = ${code} order by k.start_at`;
-  return { ...o, items: [...items] } as unknown as OrderView;
-}
-
-export async function myOrders(customer: string) {
-  await sql`select expire_holds()`;
-  const rows = await sql`select code from orders where customer_code = ${customer} order by created_at desc limit 30`;
-  return (await Promise.all(rows.map((r) => getOrder(customer, r.code)))).filter((x): x is OrderView => !!x);
-}
-
-// ---------- แนบสลิป ----------
-export async function attachSlip(customer: string, code: string, file: Buffer) {
-  if (file.length > 5 * 1024 * 1024) throw new BookingError('too_big', 'รูปใหญ่เกิน 5 MB');
-  const type = imageType(file);
-  if (!type) throw new BookingError('not_image', 'แนบได้เฉพาะรูป JPG PNG หรือ WEBP');
-  await sql`select expire_holds()`;
-  const [o] = await sql`select code, status, due_now from orders where code = ${code} and customer_code = ${customer}`;
-  if (!o) throw new BookingError('not_found', 'ไม่พบการจองนี้');
-  if (o.status === 'expired') throw new BookingError('expired', 'หมดเวลากันที่แล้ว จองใหม่อีกครั้ง');
-  if (o.status !== 'holding') throw new BookingError('bad_status', 'การจองนี้แนบสลิปแล้ว');
-  const ext = type.split('/')[1];
-  const path = `${code}/${Date.now()}.${ext}`;
-  await putFile('slips', path, file, type);
-  return sql.begin(async (tx) => {
-    // ล็อกทริปไว้ กันกดแนบซ้ำพร้อมกัน
-    const [cur] = await tx`select status from orders where code = ${code} for update`;
-    if (cur.status !== 'holding') throw new BookingError('bad_status', 'การจองนี้แนบสลิปแล้ว');
-    const [{ pc }] = await tx`select next_code('PAY') as pc`;
-    await tx`insert into payments (code, order_code, amount_due, slip_file) values (${pc}, ${code}, ${o.due_now}, ${path})`;
-    await tx`update orders set status = 'pending_review' where code = ${code}`;
-    await enqueue(tx, { order: code, channel: 'email', template: 'slip_review' });
-    return { payment: pc as string };
-  });
 }
 
 // ---------- พนักงานตรวจสลิป ----------
