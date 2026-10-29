@@ -20,19 +20,25 @@ function ChatConfirm({ liffId, oa, code, label }: { liffId?: string | null; oa?:
   const text = `ยืนยันการจอง ${code}`;
   const [st, setSt] = useState<'idle' | 'busy' | 'opened' | 'manual'>('idle');
   const [copied, setCopied] = useState(false);
+  const [why, setWhy] = useState('');
   const go = async () => {
-    setSt('busy');
+    setSt('busy'); setWhy('');
+    const log: string[] = [];
     if (liffId) {
       try {
         const liff = (await import('@line/liff')).default;
-        await within(liff.init({ liffId }), 5000);
+        if (!(liff as unknown as { id?: string }).id) await within(liff.init({ liffId }), 5000);
+        log.push('init ok');
+        const ctx = liff.getContext();
+        log.push(`in LINE: ${liff.isInClient() ? 'ใช่' : 'ไม่ใช่'} · ${ctx?.type ?? '-'}`);
         if (liff.isInClient()) {
           await within(liff.sendMessages([{ type: 'text', text }]), 5000);
           liff.closeWindow();
           return;
         }
-      } catch { /* ไม่มีสิทธิ์ส่ง / ค้าง → ทางถัดไป */ }
+      } catch (e) { log.push(`ส่งเองไม่ได้: ${(e as Error).message || e}`); }
     }
+    setWhy(log.join(' · '));
     if (oa) {
       location.href = `https://line.me/R/oaMessage/${encodeURIComponent(oa.startsWith('@') ? oa : '@' + oa)}/?${encodeURIComponent(text)}`;
       setTimeout(() => setSt('opened'), 2500);   // ยังอยู่หน้านี้ = เปิดแชทไม่ได้ → ให้คัดลอก
@@ -46,6 +52,7 @@ function ChatConfirm({ liffId, oa, code, label }: { liffId?: string | null; oa?:
       {(st === 'opened' || st === 'manual') && (
         <div className="note y" style={{ display: 'flex', flexDirection: 'column', gap: 8, textAlign: 'left' }}>
           <span>ถ้าแชทร้านไม่เปิดขึ้นมา คัดลอกข้อความนี้ไปวางในแชทร้านแล้วกดส่ง</span>
+          {why && <small className="cap">{why}</small>}
           <b className="num">{text}</b>
           <button className="btn ghost" onClick={async () => { try { await navigator.clipboard.writeText(text); setCopied(true); } catch { setCopied(false); } }}>{copied ? 'คัดลอกแล้ว ✓' : 'คัดลอกข้อความ'}</button>
         </div>
