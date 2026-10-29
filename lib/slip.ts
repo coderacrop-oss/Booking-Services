@@ -16,6 +16,7 @@ export type SlipResult = {
   amount: number | null;
   ocr: 'vision' | 'off' | 'nokey' | 'quota' | 'error';
   flags: string[];          // จุดที่พนักงานต้องดู (ภาษาคน)
+  dupOf?: { order: string; status: string };   // สลิปซ้ำกับใบไหน
   ok: string[];             // จุดที่ตรง
   message?: string;         // ข้อความถึงลูกค้าเมื่อไม่รับ
 };
@@ -131,11 +132,13 @@ export async function checkSlip(buf: Buffer, o: { due: number; createdAt: Date; 
              message: 'รูปนี้เป็น QR สำหรับจ่ายเงิน ไม่ใช่สลิป · โอนแล้วแนบรูปสลิปจากแอปธนาคาร' };
   }
   const ref = qr ? slipRef(qr) : null;
+  const slipQr = !!ref;                 // QR อื่น (เช่น QR แอดไลน์) ไม่นับว่าเป็น QR ของสลิป
 
   // กันซ้ำ: เลขอ้างอิงเดิม หรือไฟล์เดิม
-  const [dup] = await sql`select order_code from payments where slip_hash = ${hash} or (${ref}::text is not null and slip_ref = ${ref}) limit 1`;
+  const [dup] = await sql`select order_code, status from payments where slip_hash = ${hash} or (${ref}::text is not null and slip_ref = ${ref})
+                          order by created_at desc limit 1`;
   if (dup) {
-    return { verdict: 'duplicate', ref, hash, amount: null, ocr: 'off', flags, ok,
+    return { verdict: 'duplicate', ref, hash, amount: null, ocr: 'off', flags, ok, dupOf: { order: dup.order_code, status: dup.status },
              message: 'สลิปนี้เคยใช้แล้ว · แนบสลิปของการโอนครั้งนี้' };
   }
 
@@ -145,7 +148,7 @@ export async function checkSlip(buf: Buffer, o: { due: number; createdAt: Date; 
     const am = amountsIn(text);
     const exact = am.find((a) => Math.abs(a.value - o.due) < 0.005);
     amount = exact?.value ?? am.find((a) => a.near)?.value ?? null;
-    const slipLike = !!ref || am.length > 0 || /โอน|สำเร็จ|transfer|successful|พร้อมเพย์|promptpay|ธนาคาร|bank/i.test(text);
+    const slipLike = slipQr || am.length > 0 || /โอน|สำเร็จ|transfer|successful|พร้อมเพย์|promptpay|ธนาคาร|bank/i.test(text);
     if (!slipLike) {
       return { verdict: 'not_slip', ref, hash, amount: null, ocr, flags, ok,
                message: 'ไม่พบข้อมูลการโอนในรูปนี้ · แนบรูปสลิปจากแอปธนาคาร ให้เห็นทั้งใบ' };
@@ -169,13 +172,14 @@ export async function checkSlip(buf: Buffer, o: { due: number; createdAt: Date; 
       : ocr === 'error' ? 'อ่านข้อความในสลิปไม่สำเร็จ · ตรวจยอดเอง'
       : ocr === 'nokey' ? 'เปิดอ่านสลิปไว้แล้ว แต่ยังไม่ใส่ key Google Vision · ตรวจยอดเอง'
       : 'ปิดอ่านสลิปอัตโนมัติอยู่ · ตรวจยอดเอง');
-    if (!qr) {
-      // ไม่มีทั้ง QR และ OCR → บอกไม่ได้ว่าเป็นสลิป · ไม่รับไว้ก่อน ให้ถ่ายใหม่ทั้งใบ
+    if (!slipQr) {
+      // ไม่มีทั้ง QR ของสลิปและ OCR → บอกไม่ได้ว่าเป็นสลิป · ไม่รับไว้ก่อน ให้ถ่ายใหม่ทั้งใบ
       return { verdict: 'not_slip', ref, hash, amount: null, ocr, flags, ok,
-               message: 'ไม่พบ QR ของสลิปในรูปนี้ · แนบรูปสลิปจากแอปธนาคาร ให้เห็นทั้งใบและ QR มุมสลิป' };
+               message: qr ? 'QR ในรูปนี้ไม่ใช่ QR ของสลิปโอนเงิน · แนบรูปสลิปจากแอปธนาคาร ให้เห็นทั้งใบ'
+                           : 'ไม่พบ QR ของสลิปในรูปนี้ · แนบรูปสลิปจากแอปธนาคาร ให้เห็นทั้งใบและ QR มุมสลิป' };
     }
   }
   if (ref) ok.push('มีเลขอ้างอิงจาก QR ในสลิป ไม่ซ้ำ');
-  else flags.push('ไม่พบ QR ในสลิป (กันสลิปซ้ำไม่ได้)');
+  else flags.push(qr ? 'QR ในรูปไม่ใช่ QR ของสลิป (กันสลิปซ้ำไม่ได้)' : 'ไม่พบ QR ในสลิป (กันสลิปซ้ำไม่ได้)');
   return { verdict: 'review', ref, hash, amount, ocr, flags, ok };
 }

@@ -3,7 +3,7 @@ import { sql } from './db';
 import { BookingError, quote } from './booking';
 import { enqueue, sendDue } from './notify';
 import { imageType, putFile } from './storage';
-import { todayTH } from './thaidate';
+import { baht, todayTH } from './thaidate';
 import { checkSlip } from './slip';
 import { canSee, type StaffUser } from './staff';
 import type { CartItem, OrderView } from './types';
@@ -12,6 +12,7 @@ import type { CartItem, OrderView } from './types';
 function dbError(e: unknown): never {
   const err = e as { code?: string; message?: string };
   if (err.code === '23P01') throw new BookingError('just_taken', 'เพิ่งมีคนจองช่วงนี้ไป เลือกใหม่อีกครั้ง');
+  if (e instanceof BookingError) throw e;
   const m = err.message || '';
   if (/session_full/.test(m)) throw new BookingError('session_full', 'รอบนี้เพิ่งเต็ม เลือกรอบอื่น');
   if (/vaccine_required/.test(m)) throw new BookingError('vaccine_required', 'น้องยังไม่มีวัคซีนที่ผ่านตรวจ');
@@ -73,7 +74,7 @@ export async function createOrder(customer: string, items: CartItem[], acceptedP
   // ---------- ทริปของลูกค้า ----------
   export async function getOrder(customer: string, code: string): Promise<OrderView | null> {
     const [o] = await sql`
-      select code, status, total, due_now, to_char(hold_until at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as hold_until,
+      select code, status, total, due_now, paid_amount, refund_status, refund_amount, balance_due, balance_due_by::text, to_char(hold_until at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as hold_until,
              (status = 'holding' and hold_until < now()) as late,
              (select json_build_object('status', p.status, 'reason', p.reject_reason) from payments p
                where p.order_code = o.code order by p.created_at desc limit 1) as last_payment
@@ -103,18 +104,32 @@ export async function createOrder(customer: string, items: CartItem[], acceptedP
     const type = imageType(file);
     if (!type) throw new BookingError('not_image', 'แนบได้เฉพาะรูป JPG PNG หรือ WEBP');
     await sql`select expire_holds()`;
-    const [o] = await sql`select code, status, due_now, created_at, slip_dup_count from orders where code = ${code} and customer_code = ${customer}`;
+    const [o] = await sql`select code, status, due_now, paid_amount, created_at, slip_dup_count, reject_count from orders where code = ${code} and customer_code = ${customer}`;
     if (!o) throw new BookingError('not_found', 'ไม่พบการจองนี้');
     if (o.status === 'expired') throw new BookingError('expired', 'หมดเวลากันที่แล้ว จองใหม่อีกครั้ง');
     if (o.status !== 'holding') throw new BookingError('bad_status', 'การจองนี้แนบสลิปแล้ว');
   
     // คัดกรองก่อนรับ: ไม่ใช่สลิป / สลิปซ้ำ = ไม่รับ ไม่แจ้งร้าน (นับครั้งไว้บอกร้านตอนส่งสลิปที่ผ่าน)
     const [account, promptpay] = await Promise.all([setting('account_name', ''), setting('promptpay_id', '')]);
-    const chk = await checkSlip(file, { due: Number(o.due_now), createdAt: new Date(o.created_at), account, promptpay });
+    const left = Math.round((Number(o.due_now) - Number(o.paid_amount)) * 100) / 100;
+    const chk = await checkSlip(file, { due: left, createdAt: new Date(o.created_at), account, promptpay });
     if (chk.verdict !== 'review') {
+      // ส่งสลิปเดิมที่ร้านกดไม่พบเงินไปแล้ว = ยกเลิกการจอง (ระบบเดิม M19.1)
+      if (chk.dupOf?.order === code && chk.dupOf.status === 'rejected') {
+        const ids: number[] = [];
+        await sql.begin(async (tx) => {
+          await tx`update orders set status = 'cancelled', cancel_source = 'slip', hold_until = null, slip_dup_count = slip_dup_count + 1 where code = ${code} and status = 'holding'`;
+          await tx`update bookings set status = 'cancelled' where order_code = ${code} and status = 'holding'`;
+          ids.push(await enqueue(tx, { order: code, channel: 'line_push', template: 'cancelled', payload: { reason: 'ส่งสลิปเดิมที่ร้านไม่พบเงิน · จองใหม่และแนบหลักฐานใหม่ได้' } }));
+        });
+        for (const id of ids) await sendDue(1, id).catch(() => undefined);
+        throw new BookingError('slip_reused', 'สลิปนี้ร้านตรวจแล้วไม่พบเงิน ระบบจึงยกเลิกการจองนี้ · จองใหม่และแนบสลิปของการโอนใหม่');
+      }
       await sql`update orders set slip_dup_count = slip_dup_count + 1 where code = ${code}`;
       throw new BookingError(chk.verdict === 'duplicate' ? 'slip_duplicate' : 'not_slip', chk.message || 'แนบสลิปไม่สำเร็จ');
     }
+    if (Number(o.paid_amount) > 0) chk.flags.push(`ได้รับไปแล้ว ${baht(Number(o.paid_amount))} · ใบนี้ควรเป็นส่วนที่ขาด ${baht(left)}`);
+    if (o.reject_count > 0) chk.flags.push(`สลิปของการจองนี้เคยไม่ผ่าน ${o.reject_count} ครั้ง · ไม่ผ่านอีกครั้งระบบจะยกเลิก`);
     if (o.slip_dup_count > 0) chk.flags.push(`ลูกค้าเคยส่งรูปที่ไม่ผ่าน/สลิปซ้ำ ${o.slip_dup_count} ครั้ง`);
     const ext = type.split('/')[1];
     const path = `${code}/${Date.now()}.${ext}`;
@@ -126,7 +141,7 @@ export async function createOrder(customer: string, items: CartItem[], acceptedP
       if (cur.status !== 'holding') throw new BookingError('bad_status', 'การจองนี้แนบสลิปแล้ว');
       const [{ pc }] = await tx`select next_code('PAY') as pc`;
       await tx`insert into payments (code, order_code, amount_due, slip_file, slip_ref, slip_hash, ocr_amount, checks)
-               values (${pc}, ${code}, ${o.due_now}, ${path}, ${chk.ref}, ${chk.hash}, ${chk.amount},
+               values (${pc}, ${code}, ${left}, ${path}, ${chk.ref}, ${chk.hash}, ${chk.amount},
                        ${tx.json({ flags: chk.flags, ok: chk.ok, ocr: chk.ocr })})`;
       await tx`update orders set status = 'pending_review' where code = ${code}`;
       await enqueue(tx, { order: code, channel: 'email', template: 'slip_review' });
@@ -141,39 +156,101 @@ export async function createOrder(customer: string, items: CartItem[], acceptedP
 }
 
 // ---------- พนักงานตรวจสลิป ----------
-export async function reviewPayment(staffUser: StaffUser, payment: string, action: 'approve' | 'reject', amountSlip: number | null, reason: string | null) {
+// approve = ได้เงินครบ · partial = ได้บางส่วน ขอส่วนที่ขาด · reject = ไม่ผ่าน (ครั้งที่ 2 ยกเลิกการจอง ตามระบบเดิม M19.1)
+// reopen = แก้ผลที่กดไป (เฉพาะไม่ผ่าน/บางส่วน) กลับเป็นรอตรวจ
+export type ReviewAction = 'approve' | 'partial' | 'reject' | 'reopen';
+const MAX_REJECT = 2;
+const r2 = (n: number) => Math.round(n * 100) / 100;
+
+export async function reviewPayment(staffUser: StaffUser, payment: string, action: ReviewAction, amountSlip: number | null, reason: string | null, rejectKind: string | null = null) {
   const staff = staffUser.code;
   const remindH = Number(await setting('remind_hours_before', '24')) || 24;
   const hold = Number(await setting('hold_minutes', '30')) || 30;
   const pushIds: number[] = [];
-  await sql.begin(async (tx) => {
-    const [p] = await tx`select p.*, o.status as order_status from payments p join orders o on o.code = p.order_code
-                         where p.code = ${payment} for update of p, o`;
-    if (!p) throw new BookingError('not_found', 'ไม่พบสลิปนี้');
-    if (p.status !== 'pending') throw new BookingError('done', 'สลิปนี้ตรวจไปแล้ว');
-    const biz = await tx`select distinct business_code from bookings where order_code = ${p.order_code}`;
-    if (!biz.some((b) => canSee(staffUser, b.business_code))) throw new BookingError('forbidden', 'ไม่มีสิทธิ์ตรวจสลิปของธุรกิจนี้');
-    if (action === 'approve') {
-      await tx`update payments set status = 'approved', amount_slip = ${amountSlip ?? p.amount_due}, reviewed_by = ${staff}, reviewed_at = now()
-               where code = ${payment}`;
-      await tx`update orders set status = 'paid', paid_at = now(), hold_until = null where code = ${p.order_code}`;
-      const bk = await tx`update bookings set status = 'confirmed' where order_code = ${p.order_code} and status = 'holding'
-                          returning code, start_at`;
-      pushIds.push(await enqueue(tx, { order: p.order_code, channel: 'line_push', template: 'paid' }));
-      for (const b of bk) {
-        await enqueue(tx, { booking: b.code, channel: 'calendar', template: 'confirm' });
-        const when = new Date(new Date(b.start_at).getTime() - remindH * 3600000);
-        if (when.getTime() > Date.now()) await enqueue(tx, { booking: b.code, channel: 'line_push', template: 'reminder', runAfter: when.toISOString() });
+  try {
+    await sql.begin(async (tx) => {
+      const [p] = await tx`select p.*, o.status as order_status, o.due_now, o.reject_count, o.cancel_source
+                           from payments p join orders o on o.code = p.order_code
+                           where p.code = ${payment} for update of p, o`;
+      if (!p) throw new BookingError('not_found', 'ไม่พบสลิปนี้');
+      const biz = await tx`select distinct business_code from bookings where order_code = ${p.order_code}`;
+      if (!biz.some((b) => canSee(staffUser, b.business_code))) throw new BookingError('forbidden', 'ไม่มีสิทธิ์ตรวจสลิปของธุรกิจนี้');
+      const due = Number(p.due_now);
+      const [{ got }] = await tx`select coalesce(sum(amount_slip), 0)::numeric as got from payments
+                                 where order_code = ${p.order_code} and status = 'partial' and code <> ${payment}`;
+      const before = Number(got);
+
+      if (action === 'reopen') {
+        if (!['rejected', 'partial'].includes(p.status)) throw new BookingError('bad_status', 'แก้ผลได้เฉพาะสลิปที่กดไม่ผ่านหรือรับบางส่วน');
+        if (p.order_status === 'paid') throw new BookingError('bad_status', 'การจองนี้ยืนยันแล้ว');
+        if (p.order_status === 'cancelled' && p.cancel_source !== 'slip') throw new BookingError('bad_status', 'การจองนี้ถูกยกเลิกด้วยเหตุอื่น แก้ผลไม่ได้');
+        const [later] = await tx`select 1 from payments x where x.order_code = ${p.order_code} and x.code <> ${payment}
+                                 and x.created_at > (select created_at from payments where code = ${payment}) limit 1`;
+        if (later) throw new BookingError('bad_status', 'มีสลิปใหม่กว่าในการจองนี้แล้ว ตรวจสลิปใบใหม่แทน');
+        // ห้อง/รอบที่ปล่อยไปแล้วอาจมีคนจองต่อ · ฐานข้อมูลกันซ้อนให้ (error = มีคนจองไปแล้ว)
+        await tx`update bookings set status = 'holding' where order_code = ${p.order_code} and status in ('expired', 'cancelled')`;
+        await tx`update orders set status = 'pending_review', hold_until = null, cancel_source = null,
+                   reject_count = greatest(0, reject_count - ${p.status === 'rejected' ? 1 : 0}) where code = ${p.order_code}`;
+        await tx`update payments set status = 'pending', reject_reason = null, reject_kind = null, reviewed_by = null, reviewed_at = null where code = ${payment}`;
+        // ข้อความที่ยังไม่ได้ส่งของผลเดิม ไม่ต้องส่งแล้ว
+        await tx`update notifications set status = 'sent', sent_at = now(), last_error = 'ข้าม: ร้านแก้ผลตรวจ'
+                 where order_code = ${p.order_code} and status = 'queued' and template in ('slip_rejected', 'partial', 'cancelled')`;
+        return;
       }
-    } else {
+
+      if (p.status !== 'pending') throw new BookingError('done', 'สลิปนี้ตรวจไปแล้ว · กด "แก้ผล" ถ้าต้องการเปลี่ยน');
+      if (p.order_status !== 'pending_review') throw new BookingError('bad_status', 'การจองนี้ไม่ได้รอตรวจสลิป');
+
+      if (action === 'approve') {
+        const amt = amountSlip ?? r2(due - before);
+        const total = r2(before + amt);
+        if (total + 0.005 < due) throw new BookingError('short', `ยอดรวมที่ได้ ${baht(total)} ยังขาด ${baht(due - total)} · กด "ได้บางส่วน" เพื่อขอส่วนที่ขาด`);
+        await tx`update payments set status = 'approved', amount_slip = ${amt}, reviewed_by = ${staff}, reviewed_at = now() where code = ${payment}`;
+        await tx`update orders set status = 'paid', paid_at = now(), hold_until = null, paid_amount = ${total} where code = ${p.order_code}`;
+        const bk = await tx`update bookings set status = 'confirmed' where order_code = ${p.order_code} and status = 'holding'
+                            returning code, start_at`;
+        pushIds.push(await enqueue(tx, { order: p.order_code, channel: 'line_push', template: 'paid' }));
+        await enqueue(tx, { order: p.order_code, channel: 'email', template: 'paid', toCustomer: true });
+        for (const b of bk) {
+          await enqueue(tx, { booking: b.code, channel: 'calendar', template: 'confirm' });
+          const when = new Date(new Date(b.start_at).getTime() - remindH * 3600000);
+          if (when.getTime() > Date.now()) {
+            await enqueue(tx, { booking: b.code, channel: 'line_push', template: 'reminder', runAfter: when.toISOString() });
+          }
+        }
+        return;
+      }
+
+      if (action === 'partial') {
+        if (amountSlip === null || !(amountSlip > 0)) throw new BookingError('amount', 'ใส่ยอดในสลิปก่อน');
+        const total = r2(before + amountSlip);
+        if (total + 0.005 >= due) throw new BookingError('enough', 'ยอดครบแล้ว กด "ผ่าน" แทน');
+        await tx`update payments set status = 'partial', amount_slip = ${amountSlip}, reviewed_by = ${staff}, reviewed_at = now() where code = ${payment}`;
+        await tx`update orders set status = 'holding', hold_until = now() + make_interval(mins => ${hold}), paid_amount = ${total} where code = ${p.order_code}`;
+        pushIds.push(await enqueue(tx, { order: p.order_code, channel: 'line_push', template: 'partial', payload: { got: total, left: r2(due - total) } }));
+        return;
+      }
+
+      // ไม่ผ่าน
       if (!reason) throw new BookingError('reason', 'เลือกเหตุผลที่สลิปไม่ผ่าน');
-      await tx`update payments set status = 'rejected', amount_slip = ${amountSlip}, reject_reason = ${reason},
+      const n = Number(p.reject_count) + 1;
+      await tx`update payments set status = 'rejected', amount_slip = ${amountSlip}, reject_reason = ${reason}, reject_kind = ${rejectKind},
                  reviewed_by = ${staff}, reviewed_at = now() where code = ${payment}`;
-      // คืนสถานะให้ลูกค้าแนบใหม่ได้ กันที่ต่ออีก hold_minutes
-      await tx`update orders set status = 'holding', hold_until = now() + make_interval(mins => ${hold}) where code = ${p.order_code}`;
-      pushIds.push(await enqueue(tx, { order: p.order_code, channel: 'line_push', template: 'slip_rejected', payload: { reason } }));
-    }
-  });
+      if (n >= MAX_REJECT) {
+        // ไม่ผ่านครั้งที่ 2 → ยกเลิก ให้จองใหม่ (ระบบเดิม M19.1)
+        await tx`update orders set status = 'cancelled', reject_count = ${n}, cancel_source = 'slip', hold_until = null where code = ${p.order_code}`;
+        await tx`update bookings set status = 'cancelled' where order_code = ${p.order_code} and status = 'holding'`;
+        pushIds.push(await enqueue(tx, { order: p.order_code, channel: 'line_push', template: 'cancelled',
+          payload: { reason: `สลิปไม่ผ่านครั้งที่ ${n} (${reason}) · จองใหม่และแนบหลักฐานใหม่ได้` } }));
+      } else {
+        await tx`update orders set status = 'holding', reject_count = ${n}, hold_until = now() + make_interval(mins => ${hold}) where code = ${p.order_code}`;
+        pushIds.push(await enqueue(tx, { order: p.order_code, channel: 'line_push', template: 'slip_rejected',
+          payload: { reason: `${reason} · แนบใหม่ได้อีก ${MAX_REJECT - n} ครั้ง` } }));
+      }
+    });
+  } catch (e) {
+    dbError(e);
+  }
   // ส่ง LINE ทันที ถ้าพลาด รอบตั้งเวลาจะลองใหม่
   for (const id of pushIds) await sendDue(1, id).catch(() => undefined);
 }

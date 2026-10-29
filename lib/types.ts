@@ -124,7 +124,8 @@ export interface Quote { items: QuoteItem[]; total: number; due_now: number; pay
 
 export interface OrderView {
   code: string; status: 'holding' | 'pending_review' | 'paid' | 'cancelled' | 'expired';
-  total: number; due_now: number; hold_until: string | null; late: boolean;
+  total: number; due_now: number; paid_amount: number; hold_until: string | null; late: boolean;
+  refund_status: string | null; refund_amount: number; balance_due: number; balance_due_by: string | null;
   last_payment: { status: string; reason: string | null } | null;
   items: { code: string; business_code: string; biz: string; status: string; price: number; s: string; e: string; item: string; pets: string }[];
 }

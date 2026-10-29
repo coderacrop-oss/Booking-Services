@@ -8,6 +8,7 @@ import { TopBar } from './ui';
 type Order = OrderView;
 
 const pad = (n: number) => String(n).padStart(2, '0');
+const remain = (o: Order) => Math.round((Number(o.due_now) - Number(o.paid_amount || 0)) * 100) / 100;
 
 export default function PayBox({ order, qr, account, shop }: { order: Order; qr: string; account: string; shop: string }) {
   const router = useRouter();
@@ -45,7 +46,7 @@ export default function PayBox({ order, qr, account, shop }: { order: Order; qr:
     const font = getComputedStyle(document.body).fontFamily;
     g.fillStyle = '#fff'; g.fillRect(0, 0, W, H); g.fillStyle = '#111'; g.textAlign = 'center';
     g.font = `700 30px ${font}`; g.fillText(shop, W / 2, 70);
-    g.font = `800 64px ${font}`; g.fillText(baht(order.due_now), W / 2, 150);
+    g.font = `800 64px ${font}`; g.fillText(baht(remain(order)), W / 2, 150);
     g.drawImage(img, 80, 190, 560, 560);
     g.font = `400 28px ${font}`; g.fillStyle = '#555';
     if (account) g.fillText(`โอนเข้า ${account}`, W / 2, 810);
@@ -79,10 +80,11 @@ export default function PayBox({ order, qr, account, shop }: { order: Order; qr:
           <>
             <div style={{ textAlign: 'center', display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'center' }}>
               <div className="sub">สแกนจ่าย · {shop}</div>
-              <div className="num" style={{ fontSize: 36, fontWeight: 800 }}>{baht(order.due_now)}</div>
+              <div className="num" style={{ fontSize: 36, fontWeight: 800 }}>{baht(remain(order))}</div>
+              {Number(order.paid_amount) > 0 && <div className="sub">ร้านได้รับแล้ว {baht(Number(order.paid_amount))} · โอนเพิ่มอีก {baht(remain(order))}</div>}
               {left !== null && <div style={{ color: 'var(--red-ink)', fontSize: 14, fontWeight: 700 }}>กันที่ไว้ให้อีก {pad(Math.floor(left / 60))}:{pad(left % 60)} นาที</div>}
               <div style={{ width: 230, height: 230, border: '2px solid var(--ink)', borderRadius: 16, padding: 10, background: '#fff', display: 'grid', placeItems: 'center' }}>
-                {qr ? <img src={qr} alt={`QR พร้อมเพย์ ${baht(order.due_now)}`} style={{ width: '100%', height: '100%' }} />
+                {qr ? <img src={qr} alt={`QR พร้อมเพย์ ${baht(remain(order))}`} style={{ width: '100%', height: '100%' }} />
                     : <span style={{ color: '#9a9a96', fontSize: 14 }}>ร้านยังไม่ได้ตั้งเลขพร้อมเพย์</span>}
               </div>
               {account && <div className="sub">โอนเข้า {account}</div>}

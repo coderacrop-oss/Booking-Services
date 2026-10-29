@@ -19,7 +19,7 @@ export default async function PayPage({ params }: { params: Promise<{ code: stri
   const [pp, account, shop] = await Promise.all([getSetting('promptpay_id'), getSetting('account_name'), getSetting('shop_name', 'ร้าน')]);
   let qr = '';
   // PNG (ไม่ใช่ SVG) ลูกค้ากดค้างที่รูปเพื่อบันทึกได้ในแอป LINE
-  try { qr = await QRCode.toDataURL(promptPayPayload(pp, Number(o.due_now)), { width: 640, margin: 1, errorCorrectionLevel: 'M' }); }
+  try { qr = await QRCode.toDataURL(promptPayPayload(pp, Math.round((Number(o.due_now) - Number(o.paid_amount)) * 100) / 100), { width: 640, margin: 1, errorCorrectionLevel: 'M' }); }
   catch { qr = ''; }   // ยังไม่ได้ตั้งเลขพร้อมเพย์ที่ถูกต้อง
   return <PayBox order={o} qr={qr} account={account} shop={shop} />;
 }
