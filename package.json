@@ -1,0 +1,26 @@
+{
+  "name": "booking-services",
+  "private": true,
+  "version": "0.2.0",
+  "scripts": {
+    "dev": "next dev -p 3000",
+    "build": "next build",
+    "start": "next start -p 3000",
+    "typecheck": "tsc --noEmit",
+    "seed": "python3 scripts/excel_to_seed.py data/BaanMax-booking-schema.xlsx > supabase/seed.sql",
+    "test:db": "./scripts/test_db.sh"
+  },
+  "dependencies": {
+    "next": "15.5.28",
+    "postgres": "3.4.9",
+    "react": "19.2.9",
+    "react-dom": "19.2.9",
+    "server-only": "0.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.3",
+    "typescript": "5.9.3"
+  }
+}

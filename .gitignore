@@ -8,3 +8,4 @@ supabase/.branches/
 .DS_Store
 __pycache__/
 ~$*.xlsx
+*.tsbuildinfo

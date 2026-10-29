@@ -1,0 +1,26 @@
+import 'server-only';
+import postgres from 'postgres';
+
+// ต่อฐานข้อมูลจากฝั่ง server เท่านั้น
+// บน Vercel ใช้ Supabase pooler (transaction mode, port 6543) → ต้องปิด prepare
+const url = process.env.SUPABASE_DB_URL;
+
+declare global {
+  // eslint-disable-next-line no-var
+  var __sql: ReturnType<typeof postgres> | undefined;
+}
+
+function make() {
+  if (!url) throw new Error('ยังไม่ได้ตั้ง SUPABASE_DB_URL');
+  return postgres(url, {
+    prepare: false,
+    max: 5,
+    idle_timeout: 20,
+    connection: { TimeZone: 'Asia/Bangkok' },
+    types: { numeric: { to: 1700, from: [1700], serialize: (x: number) => String(x), parse: (x: string) => Number(x) } },
+  });
+}
+
+// ใช้ตัวเดิมตอน dev (hot reload) ไม่ให้เปิด connection ใหม่ทุกครั้ง
+export const sql = globalThis.__sql ?? make();
+if (process.env.NODE_ENV !== 'production') globalThis.__sql = sql;

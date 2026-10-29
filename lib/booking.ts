@@ -1,0 +1,233 @@
+import 'server-only';
+import { sql } from './db';
+import type { Business, CartItem, Pet, Quote, QuoteItem, QuoteLine } from './types';
+import { addDays, baht, daysBetween, firstTime, fromMin, isoDow, thDate, thRange, toMin, todayTH } from './thaidate';
+
+// เวลาไทย → timestamptz
+export const at = (date: string, time: string) => `${date} ${time}+07`;
+const ACTIVE = ['holding', 'confirmed', 'checked_in', 'in_progress'];
+const SLOT_STEP = 30;        // ช่องเวลา Grooming ทุก 30 นาที
+const LEAD_MIN = 60;         // จองวันนี้ได้ตั้งแต่อีก 60 นาทีข้างหน้า
+
+export class BookingError extends Error {
+  constructor(public code: string, message: string) { super(message); }
+}
+
+async function business(code: string): Promise<Business> {
+  const [b] = await sql<Business[]>`select * from businesses where code = ${code} and active`;
+  if (!b) throw new BookingError('business_not_found', 'ไม่พบธุรกิจนี้');
+  return b;
+}
+
+async function petsOf(customer: string, codes: string[]): Promise<Pet[]> {
+  if (!codes.length) return [];
+  const rows = await sql<Pet[]>`
+    select p.code, p.name, p.species, p.breed, p.weight_kg, p.note, tier_for(p.weight_kg) as tier_code,
+           (select to_char(max(v.expires_on), 'YYYY-MM-DD') from pet_vaccines v
+             where v.pet_code = p.code and v.status = 'approved') as vaccine_until, false as vaccine_pending
+    from pets p where p.customer_code = ${customer} and p.code in ${sql(codes)}`;
+  if (rows.length !== new Set(codes).size) throw new BookingError('pet_not_owner', 'มีน้องที่ไม่ใช่ของบัญชีนี้');
+  return [...rows];
+}
+
+function needVaccine(b: Business, pets: Pet[], onDate: string) {
+  if (!b.need_vaccine) return;
+  const bad = pets.filter((p) => !p.vaccine_until || p.vaccine_until < onDate);
+  if (bad.length) throw new BookingError('vaccine_required', `${bad.map((p) => p.name).join(', ')} ยังไม่มีวัคซีนที่ผ่านตรวจถึงวันที่ใช้บริการ`);
+}
+
+export function depositOf(b: Business, price: number): number {
+  if (b.deposit_type === 'full') return price;
+  if (b.deposit_type === 'percent') return Math.round((price * Number(b.deposit_value)) / 100);
+  return Math.min(Number(b.deposit_value), price);
+}
+
+const stayTimes = (b: Business) => ({ in: firstTime(b.checkin_time, '14:00'), out: firstTime(b.checkout_time, '12:00') });
+
+// ---------- ห้อง/บ้าน: ช่วงวัน ----------
+export async function stayAvailability(bizCode: string, from: string, to: string, petCount: number, guests: number | null, maxKg: number | null) {
+  const b = await business(bizCode);
+  if (b.booking_type !== 'stay') throw new BookingError('wrong_type', 'ธุรกิจนี้ไม่ใช่การจองแบบช่วงวัน');
+  const nights = daysBetween(from, to);
+  if (nights < 1 || nights > 60) throw new BookingError('bad_range', 'เลือกวันเข้าและวันออกใหม่');
+  const t = stayTimes(b);
+  const rows = await sql`
+    select u.code, u.max_people, u.max_pets, u.max_pet_kg,
+      exists (select 1 from bookings k where k.unit_code = u.code and k.kind = 'stay' and k.status in ${sql(ACTIVE)}
+              and tstzrange(k.start_at, k.end_at, '[)') && tstzrange(${at(from, t.in)}::timestamptz, ${at(to, t.out)}::timestamptz, '[)')) as taken,
+      (select c.reason from closures c, generate_series(${from}::date, ${to}::date - 1, '1 day') d
+        where c.business_code = u.business_code and d::date between c.date_from and c.date_to
+          and (c.unit_code is null or c.unit_code = u.code) and c.session_code is null limit 1) as closed
+    from units u where u.business_code = ${bizCode} and u.active order by u.sort, u.code`;
+  return rows.map((r) => {
+    let reason: string | null = null;
+    if (r.taken) reason = 'ไม่ว่างช่วงนี้';
+    else if (r.closed !== null) reason = r.closed || 'ปิดช่วงนี้';
+    else if (guests && r.max_people && guests > r.max_people) reason = `รับได้ ${r.max_people} คน`;
+    else if (petCount && r.max_pets !== null && petCount > r.max_pets) reason = r.max_pets ? `รับน้องได้ ${r.max_pets} ตัว` : 'ไม่รับน้อง';
+    else if (maxKg && r.max_pet_kg && maxKg > Number(r.max_pet_kg)) reason = `น้องไม่เกิน ${r.max_pet_kg} กก.`;
+    return { code: r.code as string, free: !reason, reason };
+  });
+}
+
+// ---------- รอบสระ ----------
+export async function sessionAvailability(bizCode: string, date: string, petKgs: number[]) {
+  const b = await business(bizCode);
+  if (b.booking_type !== 'session') throw new BookingError('wrong_type', 'ธุรกิจนี้ไม่ใช่การจองแบบรอบ');
+  const dow = isoDow(date);
+  const rows = await sql`
+    select s.code, to_char(s.start_time, 'HH24:MI') as start, to_char(s.end_time, 'HH24:MI') as "end", s.size_rule, s.capacity,
+           session_left(s.code, (${date}::date + s.start_time) at time zone 'Asia/Bangkok') as left,
+           is_closed(${bizCode}, s.unit_code, s.code, ${date}::date) as closed,
+           ((${date}::date + s.start_time) at time zone 'Asia/Bangkok') < now() as past
+    from pool_sessions s join units u on u.code = s.unit_code
+    where u.business_code = ${bizCode} and s.active and u.active and ${dow} = any (s.weekdays)
+    order by s.start_time`;
+  return rows.map((r) => {
+    const fits = petKgs.every((kg) => (r.size_rule === 'small' ? kg <= 10 : r.size_rule === 'large' ? kg > 10 : true));
+    let reason: string | null = null;
+    if (r.closed) reason = 'ปิดวันนี้';
+    else if (r.past) reason = 'เลยเวลาแล้ว';
+    else if (!fits) reason = 'ขนาดน้องไม่ตรงรอบ';
+    else if (r.left < Math.max(1, petKgs.length)) reason = r.left > 0 ? `เหลือ ${r.left} ที่` : 'เต็ม';
+    return { code: r.code as string, start: r.start as string, end: r.end as string, size_rule: r.size_rule as string,
+             capacity: r.capacity as number, left: r.left as number, free: !reason, reason };
+  });
+}
+
+// ---------- Grooming: เวลา × ช่าง ----------
+async function groomDuration(bizCode: string, service: string, addons: string[], tier: string | null) {
+  const [s] = await sql`
+    select s.code, s.name, s.price_mode, s.price, s.duration_min, sp.price as tier_price, sp.duration_min as tier_min
+    from services s left join service_prices sp on sp.service_code = s.code and sp.tier_code = ${tier}
+    where s.code = ${service} and s.business_code = ${bizCode} and s.kind = 'main' and s.active`;
+  if (!s) throw new BookingError('service_invalid', 'ไม่พบบริการนี้');
+  const price = s.price_mode === 'by_weight' ? s.tier_price : s.price;
+  const mins = s.price_mode === 'by_weight' ? s.tier_min : s.duration_min;
+  if (price === null || mins === null) throw new BookingError('no_price', 'บริการนี้ยังไม่มีราคาสำหรับขนาดน้อง');
+  const add = addons.length
+    ? await sql`select code, name, price, duration_min from services
+                where code in ${sql(addons)} and business_code = ${bizCode} and kind = 'addon' and active`
+    : [];
+  if (add.length !== new Set(addons).size) throw new BookingError('addon_invalid', 'บริการเสริมไม่ถูกต้อง');
+  return {
+    name: s.name as string, price: Number(price), mins: Number(mins),
+    addons: add.map((a) => ({ code: a.code as string, name: a.name as string, price: Number(a.price), mins: Number(a.duration_min || 0) })),
+  };
+}
+
+export async function slotAvailability(bizCode: string, date: string, service: string, addons: string[], tier: string | null) {
+  const b = await business(bizCode);
+  if (b.booking_type !== 'slot') throw new BookingError('wrong_type', 'ธุรกิจนี้ไม่ใช่การจองแบบช่องเวลา');
+  const d = await groomDuration(bizCode, service, addons, tier);
+  const total = d.mins + d.addons.reduce((a, x) => a + x.mins, 0);
+  const [{ closed }] = await sql`select is_closed(${bizCode}, null, null, ${date}::date) as closed`;
+  if (closed) return { minutes: total, slots: [] as { start: string; staff: string; staff_name: string }[], closed: true };
+
+  const staff = await sql`
+    select code, display_name, to_char(work_start, 'HH24:MI') as ws, to_char(work_end, 'HH24:MI') as we,
+      coalesce((select json_agg(json_build_array(to_char(k.start_at at time zone 'Asia/Bangkok', 'HH24:MI'),
+                                                  to_char(k.end_at at time zone 'Asia/Bangkok', 'HH24:MI')))
+                from bookings k where k.staff_code = st.code and k.kind = 'slot' and k.status in ${sql(ACTIVE)}
+                  and (k.start_at at time zone 'Asia/Bangkok')::date = ${date}::date), '[]') as busy
+    from staff st
+    where is_groomer and invite_status <> 'removed' and ${isoDow(date)} = any (work_days)
+      and (${bizCode} = any (businesses) or 'all' = any (businesses))
+    order by code`;
+
+  const nowMin = date === todayTH() ? toMin(new Date(Date.now() + 7 * 3600000).toISOString().slice(11, 16)) + LEAD_MIN : -1;
+  const byTime = new Map<string, { start: string; staff: string; staff_name: string }>();
+  for (const st of staff) {
+    const busy = (st.busy as [string, string][]).map(([a, z]) => [toMin(a), toMin(z)]);
+    for (let m = toMin(st.ws); m + total <= toMin(st.we); m += SLOT_STEP) {
+      if (m < nowMin) continue;
+      if (busy.some(([a, z]) => m < z && a < m + total)) continue;
+      const k = fromMin(m);
+      if (!byTime.has(k)) byTime.set(k, { start: k, staff: st.code, staff_name: st.display_name });
+    }
+  }
+  const slots = [...byTime.values()].sort((a, z) => a.start.localeCompare(z.start));
+  return { minutes: total, slots, closed: false };
+}
+
+// ---------- คิดราคา (server เป็นคนคิดเสมอ หน้าจอแค่แสดง) ----------
+export async function quote(customer: string, items: CartItem[]): Promise<Quote> {
+  if (!items.length || items.length > 8) throw new BookingError('bad_cart', 'ไม่มีรายการ');
+  const out: QuoteItem[] = [];
+  for (const it of items) {
+    const b = await business(it.business);
+    if (b.booking_type !== it.kind) throw new BookingError('wrong_type', 'ชนิดการจองไม่ตรงธุรกิจ');
+    let title = '', when = '', price = 0;
+    const lines: QuoteLine[] = [];
+
+    if (it.kind === 'stay') {
+      const pets = await petsOf(customer, it.pets);
+      needVaccine(b, pets, it.from);
+      const [u] = await sql`select * from units where code = ${it.unit} and business_code = ${b.code} and active`;
+      if (!u) throw new BookingError('unit_invalid', 'ไม่พบห้อง/บ้านนี้');
+      const avail = (await stayAvailability(b.code, it.from, it.to, pets.length, it.guests ?? null,
+        pets.length ? Math.max(...pets.map((p) => Number(p.weight_kg))) : null)).find((x) => x.code === it.unit);
+      if (!avail?.free) throw new BookingError('unit_taken', `${u.name}: ${avail?.reason || 'ไม่ว่าง'}`);
+      const nights = daysBetween(it.from, it.to);
+      let room = 0, wk = 0;
+      for (let i = 0; i < nights; i++) {
+        const dow = isoDow(addDays(it.from, i));
+        const p = (dow === 5 || dow === 6) && u.weekend_price !== null ? Number(u.weekend_price) : Number(u.price);
+        room += p; if (p !== Number(u.price)) wk++;
+      }
+      lines.push({ label: `${u.name} × ${nights} คืน`, amount: room, note: wk ? `รวมราคาศุกร์–เสาร์ ${wk} คืน` : undefined });
+      if (pets.length && u.pet_fee) {
+        lines.push({ label: `ค่าน้อง ${pets.length} ตัว × ${nights} คืน`, amount: Number(u.pet_fee) * pets.length * nights });
+      }
+      title = pets.length ? `${u.name} · ${pets.map((p) => p.name).join(', ')}` : u.name;
+      when = `${thRange(it.from, it.to)} · ${nights} คืน`;
+    }
+
+    if (it.kind === 'session') {
+      const pets = await petsOf(customer, it.pets);
+      if (!pets.length) throw new BookingError('no_pet', 'เลือกน้องอย่างน้อย 1 ตัว');
+      needVaccine(b, pets, it.date);
+      const s = (await sessionAvailability(b.code, it.date, pets.map((p) => Number(p.weight_kg)))).find((x) => x.code === it.session);
+      if (!s) throw new BookingError('session_invalid', 'ไม่มีรอบนี้ในวันที่เลือก');
+      if (!s.free) throw new BookingError('session_full', `รอบ ${s.start}: ${s.reason}`);
+      const [ps] = await sql`select price from pool_sessions where code = ${it.session}`;
+      lines.push({ label: `รอบ ${s.start}–${s.end} × ${pets.length} ตัว`, amount: Number(ps.price) * pets.length });
+      title = `สระ ${s.start} · ${pets.map((p) => p.name).join(', ')}`;
+      when = thDate(it.date);
+    }
+
+    if (it.kind === 'slot') {
+      const [pet] = await petsOf(customer, [it.pet]);
+      needVaccine(b, [pet], it.start.slice(0, 10));
+      const date = it.start.slice(0, 10), time = it.start.slice(11, 16);
+      const d = await groomDuration(b.code, it.service, it.addons, pet.tier_code);
+      const av = await slotAvailability(b.code, date, it.service, it.addons, pet.tier_code);
+      // ช่างที่เลือกต้องว่างเวลานั้น (เช็กกับคิวจริงอีกครั้งตอนสร้างการจอง)
+      const ok = av.slots.some((s) => s.start === time) &&
+        (await slotFreeFor(it.staff, date, time, av.minutes));
+      if (!ok) throw new BookingError('slot_taken', `เวลา ${time} ไม่ว่างแล้ว`);
+      const [tier] = await sql`select label from weight_tiers where code = ${pet.tier_code}`;
+      lines.push({ label: `${d.name} (น้อง${tier?.label ?? ''} ${pet.weight_kg} กก.)`, amount: d.price });
+      for (const a of d.addons) lines.push({ label: a.name, amount: a.price });
+      title = `${d.name} · ${pet.name}`;
+      when = `${thDate(date)} · ${time}`;
+    }
+
+    price = lines.reduce((a, l) => a + l.amount, 0);
+    out.push({ business: b.code, title, when, lines, price, deposit: depositOf(b, price) });
+  }
+  const total = out.reduce((a, i) => a + i.price, 0);
+  const due_now = out.reduce((a, i) => a + i.deposit, 0);
+  return { items: out, total, due_now, pay_later: total - due_now };
+}
+
+async function slotFreeFor(staff: string, date: string, time: string, minutes: number) {
+  const [r] = await sql`
+    select not exists (select 1 from bookings k where k.staff_code = ${staff} and k.kind = 'slot' and k.status in ${sql(ACTIVE)}
+      and tstzrange(k.start_at, k.end_at, '[)') && tstzrange(${at(date, time)}::timestamptz,
+                                                          ${at(date, time)}::timestamptz + make_interval(mins => ${minutes}), '[)')) as ok,
+      exists (select 1 from staff where code = ${staff} and is_groomer and ${isoDow(date)} = any (work_days)) as works`;
+  return r.ok && r.works;
+}
+
+export { baht };
