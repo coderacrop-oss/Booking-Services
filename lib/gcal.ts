@@ -51,6 +51,15 @@ export async function insertEvent(cal: string, ev: { summary: string; descriptio
   return ((await r.json()) as { id: string }).id;
 }
 
+export async function patchEvent(cal: string, id: string, ev: { start: string; end: string }) {
+  const r = await fetch(api(cal, `/${encodeURIComponent(id)}`), {
+    method: 'PATCH',
+    headers: { authorization: `Bearer ${await token()}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ start: { dateTime: ev.start, timeZone: 'Asia/Bangkok' }, end: { dateTime: ev.end, timeZone: 'Asia/Bangkok' } }),
+  });
+  if (!r.ok) throw new Error(`calendar patch ${r.status}`);
+}
+
 export async function deleteEvent(cal: string, id: string) {
   const r = await fetch(api(cal, `/${encodeURIComponent(id)}`), { method: 'DELETE', headers: { authorization: `Bearer ${await token()}` } });
   if (!r.ok && r.status !== 404 && r.status !== 410) throw new Error(`calendar delete ${r.status}`);

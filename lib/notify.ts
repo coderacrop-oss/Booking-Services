@@ -3,12 +3,13 @@ import type { TransactionSql } from 'postgres';
 import { sql } from './db';
 import { pushMessage } from './line';
 import { emailReady, sendEmail } from './email';
-import { calendarReady, deleteEvent, eventId, insertEvent } from './gcal';
+import { calendarReady, deleteEvent, eventId, insertEvent, patchEvent } from './gcal';
 import { baht, thDate } from './thaidate';
+import { flexCard, liffUrl, type Card } from './flex';
 
 type Tx = TransactionSql<{}>;
 export type Template = 'paid' | 'slip_rejected' | 'reminder' | 'new_booking' | 'slip_review' | 'cancelled' | 'groom_done' | 'confirm'
-  | 'vaccine_ok' | 'vaccine_rejected' | 'vaccine_review' | 'delete_request';
+  | 'vaccine_ok' | 'vaccine_rejected' | 'vaccine_review' | 'delete_request' | 'rescheduled';
 type Channel = 'line_push' | 'email' | 'calendar';
 
 // ใส่คิว (ในธุรกรรมเดียวกับการเปลี่ยนสถานะ) · ส่งจริงทีหลัง ส่งพลาดลองใหม่ได้
@@ -26,7 +27,7 @@ type Job = { id: number; order_code: string | null; booking_code: string | null;
 // รายการจองที่เกี่ยวกับงานนี้
 async function bookingsOf(j: Job) {
   return sql`
-    select k.code, k.business_code, b.name as biz, b.calendar_id, k.status, k.calendar_event_id, k.price,
+    select k.code, k.order_code, k.business_code, b.name as biz, b.color, b.booking_type, b.calendar_id, k.status, k.calendar_event_id, k.price,
            coalesce(u.name, sv.name, '') as item, c.display_name as customer, c.phone,
            to_char(k.start_at at time zone 'Asia/Bangkok', 'YYYY-MM-DD') as d, to_char(k.start_at at time zone 'Asia/Bangkok', 'HH24:MI') as t,
            to_char(k.start_at at time zone 'Asia/Bangkok', 'YYYY-MM-DD"T"HH24:MI:SS') as s_iso,
@@ -47,38 +48,55 @@ async function shopName() {
 // ร้านปิดข้อความบางแบบได้ที่ ตั้งค่า → ข้อความ LINE
 const MSG_KEY: Partial<Record<Template, string>> = {
   paid: 'msg_paid', reminder: 'msg_reminder', slip_rejected: 'msg_slip_rejected', groom_done: 'msg_groom_done',
-  cancelled: 'msg_cancelled', vaccine_ok: 'msg_vaccine', vaccine_rejected: 'msg_vaccine',
+  cancelled: 'msg_cancelled', vaccine_ok: 'msg_vaccine', vaccine_rejected: 'msg_vaccine', rescheduled: 'msg_rescheduled',
 };
-async function lineFor(j: Job): Promise<{ to: string; text: string } | 'skip'> {
+async function lineFor(j: Job): Promise<{ to: string; text: string; card?: Card } | 'skip'> {
   const key = MSG_KEY[j.template];
   if (key) { const [o] = await sql`select value from settings where key = ${key}`; if (o?.value === 'off') return 'skip'; }
   const name = await shopName();
   if (j.pet_code) {
-    const [p] = await sql`select p.name, c.line_user_id from pets p join customers c on c.code = p.customer_code where p.code = ${j.pet_code}`;
+    const [p] = await sql`select p.code, p.name, c.line_user_id from pets p join customers c on c.code = p.customer_code where p.code = ${j.pet_code}`;
     if (!p?.line_user_id) throw new Error('ลูกค้าไม่มี LINE userId');
-    const text = j.template === 'vaccine_ok'
-      ? `${name}: วัคซีนของ${p.name}ผ่านการตรวจแล้ว ✅ จองสระและ Pet hotel ได้เลย`
-      : `${name}: วัคซีนของ${p.name}ยังไม่ผ่าน — ${j.payload.reason ?? ''}\nส่งรูปใหม่ได้ที่เมนู "น้องของฉัน"`;
-    return { to: p.line_user_id, text };
+    const ok = j.template === 'vaccine_ok';
+    const text = ok ? `${name}: วัคซีนของ${p.name}ผ่านการตรวจแล้ว ✅ จองสระและ Pet hotel ได้เลย`
+                    : `${name}: วัคซีนของ${p.name}ยังไม่ผ่าน — ${j.payload.reason ?? ''}\nส่งรูปใหม่ได้ที่เมนู "น้องของฉัน"`;
+    const url = liffUrl(ok ? '/' : `/me/pets/${p.code}`);
+    return { to: p.line_user_id, text, card: {
+      head: `${name} · สมุดวัคซีน`, headColor: ok ? '#1E7B4A' : '#B8262E',
+      title: ok ? `วัคซีนของ${p.name}ผ่านแล้ว` : `วัคซีนของ${p.name}ยังไม่ผ่าน`,
+      body: ok ? 'จองสระและ Pet hotel ได้เลย' : `${j.payload.reason ?? ''} · ส่งรูปใหม่ได้`,
+      button: url ? { label: ok ? 'จองบริการ' : 'ส่งรูปใหม่', url } : undefined } };
   }
   // ข้อความทั่วไปไม่แสดงรายการที่ยกเลิก/หมดเวลาแล้ว (ยกเว้นแจ้งยกเลิก)
   const rows = (await bookingsOf(j)).filter((r) => j.template === 'cancelled' || !['cancelled', 'expired'].includes(r.status));
-  const [c] = await sql`select c.line_user_id, o.status from customers c join orders o on o.customer_code = c.code
+  const [c] = await sql`select c.line_user_id, o.status, o.code, o.total, o.due_now from customers c join orders o on o.customer_code = c.code
                         where o.code = coalesce(${j.order_code}, (select order_code from bookings where code = ${j.booking_code}))`;
   if (!c?.line_user_id) throw new Error('ลูกค้าไม่มี LINE userId');
   // เตือนก่อนวัน: ส่งเฉพาะที่ยังยืนยันอยู่
   if (j.template === 'reminder' && (c.status !== 'paid' || rows.every((r) => r.status !== 'confirmed'))) return 'skip';
   const list = rows.map((r) => `• ${r.biz} ${r.item}${r.pets ? ' · ' + r.pets : ''}\n  ${thDate(r.d)} ${r.t} (${r.code})`).join('\n');
-  const T: Partial<Record<Template, string>> = {
-    paid: `${name}: ร้านตรวจสลิปแล้ว การจองยืนยันเรียบร้อย ✅\n${list}`,
-    slip_rejected: `${name}: สลิปยังไม่ผ่าน — ${j.payload.reason ?? ''}\nแนบสลิปใหม่ได้ที่เมนู "การจองของฉัน"\n${list}`,
-    reminder: `${name}: เตือนการจองที่ใกล้ถึง ⏰\n${list}`,
-    cancelled: `${name}: ยกเลิกการจองแล้ว${j.payload.reason ? ' — ' + j.payload.reason : ''}\n${list}\nเรื่องเงินมัดจำเป็นไปตามเงื่อนไขการยกเลิก ทักแชทร้านได้`,
-    groom_done: `${name}: ${rows[0]?.pets || 'น้อง'} อาบน้ำ/แต่งขนเสร็จแล้ว 🐾 มารับได้เลย`,
+  const items = rows.map((r) => ({ business: r.business_code, color: r.color, type: r.booking_type, biz: `${r.biz} · ${r.code}`, title: `${r.item}${r.pets ? ' · ' + r.pets : ''}`, when: `${thDate(r.d)} · ${r.t}` }));
+  const url = liffUrl(`/me/b/${c.code}`);
+  const btn = (label: string, path?: string) => { const u = path ? liffUrl(path) : url; return u ? { label, url: u } : undefined; };
+  const old = typeof j.payload.old === 'string' ? `${thDate(j.payload.old.slice(0, 10))} ${j.payload.old.slice(11, 16)}` : '';
+  const T: Partial<Record<Template, [string, Card]>> = {
+    paid: [`${name}: ร้านตรวจสลิปแล้ว การจองยืนยันเรียบร้อย ✅\n${list}`,
+      { head: `${name} · ยืนยันการจอง`, headColor: '#1E7B4A', title: 'จองเรียบร้อย ✅', items,
+        rows: [['ชำระแล้ว', baht(Number(c.due_now))], ...(Number(c.total) > Number(c.due_now) ? [['จ่ายที่ร้าน', baht(Number(c.total) - Number(c.due_now))] as [string, string]] : [])], button: btn('ดูการจอง') }],
+    slip_rejected: [`${name}: สลิปยังไม่ผ่าน — ${j.payload.reason ?? ''}\nแนบสลิปใหม่ได้ที่เมนู "การจองของฉัน"\n${list}`,
+      { head: `${name} · ตรวจสลิป`, headColor: '#B8262E', title: 'สลิปยังไม่ผ่าน', body: String(j.payload.reason ?? ''), items, button: btn('แนบสลิปใหม่', `/pay/${c.code}`) }],
+    reminder: [`${name}: เตือนการจองที่ใกล้ถึง ⏰\n${list}`,
+      { head: `${name} · เตือนก่อนถึงวัน`, title: 'ใกล้ถึงวันแล้ว ⏰', items, button: btn('ดูรายละเอียด') }],
+    cancelled: [`${name}: ยกเลิกการจองแล้ว${j.payload.reason ? ' — ' + j.payload.reason : ''}\n${list}\nเรื่องเงินมัดจำเป็นไปตามเงื่อนไขการยกเลิก ทักแชทร้านได้`,
+      { head: `${name} · ยกเลิกการจอง`, headColor: '#B8262E', title: 'ยกเลิกการจองแล้ว', body: `${j.payload.reason ? j.payload.reason + ' · ' : ''}เงินมัดจำเป็นไปตามเงื่อนไขการยกเลิก ทักแชทร้านได้`, items }],
+    groom_done: [`${name}: ${rows[0]?.pets || 'น้อง'} อาบน้ำ/แต่งขนเสร็จแล้ว 🐾 มารับได้เลย`,
+      { head: `${name} · Grooming`, headColor: '#E8444C', title: `${rows[0]?.pets || 'น้อง'} พร้อมกลับบ้านแล้ว 🐾`, body: 'อาบน้ำ/แต่งขนเสร็จแล้ว มารับได้เลย', items }],
+    rescheduled: [`${name}: ร้านเลื่อนวันให้แล้ว${old ? ` (เดิม ${old})` : ''}\n${list}`,
+      { head: `${name} · เลื่อนวัน`, title: 'เลื่อนวันเรียบร้อย', body: old ? `วันเดิม ${old}` : undefined, items, button: btn('ดูการจอง') }],
   };
-  const text = T[j.template];
-  if (!text) return 'skip';
-  return { to: c.line_user_id, text };
+  const m = T[j.template];
+  if (!m) return 'skip';
+  return { to: c.line_user_id, text: m[0], card: m[1] };
 }
 
 async function emailFor(j: Job): Promise<{ subject: string; text: string } | 'skip'> {
@@ -107,6 +125,8 @@ async function runCalendar(j: Job) {
     if (j.template === 'cancelled') {
       if (r.calendar_event_id) await deleteEvent(r.calendar_id, r.calendar_event_id);
       await sql`update bookings set calendar_event_id = null where code = ${r.code}`;
+    } else if (j.template === 'rescheduled' && r.calendar_event_id) {
+      await patchEvent(r.calendar_id, r.calendar_event_id, { start: r.s_iso, end: r.e_iso });
     } else if (r.status !== 'cancelled' && r.status !== 'expired') {
       const id = await insertEvent(r.calendar_id, {
         id: eventId(r.code),
@@ -145,7 +165,8 @@ export async function sendDue(limit = 20, onlyId?: number): Promise<{ sent: numb
       let done: 'sent' | 'skip' = 'sent';
       if (j.channel === 'line_push') {
         const m = await lineFor(j);
-        if (m === 'skip') done = 'skip'; else await pushMessage(m.to, [{ type: 'text', text: m.text }]);
+        if (m === 'skip') done = 'skip';
+        else await pushMessage(m.to, [m.card ? { type: 'flex', altText: m.text.slice(0, 380), contents: flexCard(m.card) } : { type: 'text', text: m.text }]);
       } else if (j.channel === 'email') {
         const [to] = await sql`select value from settings where key = 'notify_email'`;
         const m = await emailFor(j);

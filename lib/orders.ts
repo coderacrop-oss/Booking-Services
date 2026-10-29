@@ -15,6 +15,7 @@ function dbError(e: unknown): never {
   if (/session_full/.test(m)) throw new BookingError('session_full', 'รอบนี้เพิ่งเต็ม เลือกรอบอื่น');
   if (/vaccine_required/.test(m)) throw new BookingError('vaccine_required', 'น้องยังไม่มีวัคซีนที่ผ่านตรวจ');
   if (/size_mismatch/.test(m)) throw new BookingError('size_mismatch', 'ขนาดน้องไม่ตรงรอบ');
+  if (/session_time_mismatch/.test(m)) throw new BookingError('session_day', 'รอบนี้ไม่เปิดวันที่เลือก');
   if (/too_many_pets|pet_too_big|too_many_guests/.test(m)) throw new BookingError('over_limit', 'เกินจำนวนที่รับได้');
   throw e;
 }
@@ -194,5 +195,73 @@ export async function bookingAction(staffUser: StaffUser, code: string, action: 
       pushIds.push(await enqueue(tx, { booking: code, channel: 'line_push', template: 'groom_done' }));
     }
   });
+  for (const id of pushIds) await sendDue(1, id).catch(() => undefined);
+}
+
+// ---------- เลื่อนวัน (พนักงาน) ----------
+// ราคาเดิม · ฐานข้อมูลตรวจซ้อน/รอบเต็ม/ช่างว่างให้อีกชั้น · แจ้งลูกค้า + แก้ปฏิทิน
+export async function reschedule(staffUser: StaffUser, code: string, p: { date?: string; nights?: number; session?: string; time?: string; staff?: string }) {
+  const DATE = /^\d{4}-\d{2}-\d{2}$/;
+  if (!p.date || !DATE.test(p.date)) throw new BookingError('bad_date', 'เลือกวันใหม่');
+  const date: string = p.date;
+  if (date < todayTH()) throw new BookingError('bad_date', 'เลือกวันที่ยังไม่ผ่าน');
+  const pushIds: number[] = [];
+  try {
+    await sql.begin(async (tx) => {
+      const [b] = await tx`select k.*, bz.checkin_time, bz.checkout_time,
+                                  to_char(k.start_at at time zone 'Asia/Bangkok', 'YYYY-MM-DD HH24:MI') as old_s,
+                                  extract(epoch from k.end_at - k.start_at)::int / 60 as mins
+                           from bookings k join businesses bz on bz.code = k.business_code where k.code = ${code} for update of k`;
+      if (!b) throw new BookingError('not_found', 'ไม่พบการจองนี้');
+      if (!canSee(staffUser, b.business_code)) throw new BookingError('forbidden', 'ไม่มีสิทธิ์ในธุรกิจนี้');
+      if (!['holding', 'confirmed'].includes(b.status)) throw new BookingError('bad_status', 'เลื่อนได้เฉพาะการจองที่ยังไม่เริ่มใช้บริการ');
+      const hm = (s: string | null, f: string) => (/(\d{1,2}):(\d{2})/.exec(s || '')?.slice(1, 3).map((x, i) => (i ? x : x.padStart(2, '0'))).join(':')) || f;
+      let start: string, end: string, session: string | null = b.session_code, staff: string | null = b.staff_code;
+      if (b.kind === 'stay') {
+        const n = Math.round(Number(p.nights || 0)) || Math.max(1, Math.round(Number(b.mins) / 1440));
+        if (n < 1 || n > 60) throw new BookingError('bad', 'จำนวนคืนไม่ถูกต้อง');
+        const [{ closed }] = await tx`select exists (select 1 from generate_series(${date}::date, ${date}::date + ${n - 1}::int, '1 day') d
+                                        where is_closed(${b.business_code}, ${b.unit_code}, null, d::date)) as closed`;
+        if (closed) throw new BookingError('closed', 'มีวันที่ร้านปิดหรือห้องปิดอยู่ในช่วงใหม่');
+        const [{ to }] = await tx`select (${date}::date + ${n}::int)::text as to`;
+        start = `${date} ${hm(b.checkin_time, '14:00')}+07`; end = `${to} ${hm(b.checkout_time, '12:00')}+07`;
+      } else if (b.kind === 'session') {
+        session = p.session || b.session_code;
+        const [s] = await tx`select to_char(start_time, 'HH24:MI') as a, to_char(end_time, 'HH24:MI') as z from pool_sessions where code = ${session} and active`;
+        if (!s) throw new BookingError('bad', 'ไม่พบรอบนี้');
+        const [{ closed }] = await tx`select is_closed(${b.business_code}, ${b.unit_code}, ${session}, ${date}::date) as closed`;
+        if (closed) throw new BookingError('closed', 'วันที่เลือกสระปิด');
+        start = `${date} ${s.a}+07`; end = `${date} ${s.z}+07`;
+        // ขนาดน้องต้องตรงรอบใหม่
+        const [{ bad }] = await tx`select exists (select 1 from booking_pets bp join pets pt on pt.code = bp.pet_code join pool_sessions ps on ps.code = ${session}
+                                     where bp.booking_code = ${code} and not pet_fits_size(pt.weight_kg, ps.size_rule)) as bad`;
+        if (bad) throw new BookingError('size_mismatch', 'ขนาดน้องไม่ตรงรอบใหม่');
+      } else {
+        if (!p.time || !/^\d{2}:\d{2}$/.test(p.time)) throw new BookingError('bad', 'เลือกเวลาใหม่');
+        staff = p.staff || b.staff_code;
+        const [{ closed }] = await tx`select is_closed(${b.business_code}, null, null, ${date}::date) as closed`;
+        if (closed) throw new BookingError('closed', 'วันที่เลือกร้านปิด');
+        const [w] = await tx`select ${p.time}::time >= work_start and (${p.time}::time + make_interval(mins => ${b.mins})) <= work_end
+                                    and extract(isodow from ${date}::date)::int = any (work_days) as ok
+                             from staff where code = ${staff} and is_groomer`;
+        if (!w?.ok) throw new BookingError('staff_off', 'ช่างไม่ได้ทำงานเวลานั้น');
+        start = `${date} ${p.time}+07`;
+        const [{ e }] = await tx`select to_char((${start}::timestamptz + make_interval(mins => ${b.mins})) at time zone 'Asia/Bangkok', 'YYYY-MM-DD HH24:MI') || '+07' as e`;
+        end = e;
+      }
+      await tx`update bookings set start_at = ${start}::timestamptz, end_at = ${end}::timestamptz, session_code = ${session}, staff_code = ${staff} where code = ${code}`;
+      // การเตือนเดิมยกเลิก ตั้งใหม่ตามวันใหม่
+      await tx`update notifications set status = 'sent', last_error = 'ข้าม: เลื่อนวันแล้ว', sent_at = now()
+               where booking_code = ${code} and template = 'reminder' and status = 'queued'`;
+      const [rv] = await tx`select value from settings where key = 'remind_hours_before'`;
+      const v = rv?.value ?? '24';
+      const when = new Date(new Date(start.replace(' ', 'T').replace('+07', '+07:00')).getTime() - (Number(v) || 24) * 3600000);
+      if (when.getTime() > Date.now() && b.status === 'confirmed') await enqueue(tx, { booking: code, channel: 'line_push', template: 'reminder', runAfter: when.toISOString() });
+      pushIds.push(await enqueue(tx, { booking: code, channel: 'line_push', template: 'rescheduled', payload: { old: b.old_s } }));
+      if (b.calendar_event_id) await enqueue(tx, { booking: code, channel: 'calendar', template: 'rescheduled' });
+    });
+  } catch (e) {
+    dbError(e);
+  }
   for (const id of pushIds) await sendDue(1, id).catch(() => undefined);
 }

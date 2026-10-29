@@ -10,6 +10,7 @@ import { BOOK_ST, ORDER_ST, Pill } from '@/lib/status';
 import Head from '@/components/admin/Head';
 import ActBtn from '@/components/admin/ActBtn';
 import CancelOrder from '@/components/admin/CancelOrder';
+import Reschedule from '@/components/admin/Reschedule';
 import { vaxState } from '@/lib/vax';
 
 export const dynamic = 'force-dynamic';
@@ -27,7 +28,9 @@ export default async function BookingDetail({ params }: { params: Promise<{ code
     select k.code, k.order_code, k.business_code, b.name as biz, b.color, b.booking_type, k.kind, k.status, k.price, k.guests, k.staff_code,
            ${o.status}::text as order_status,
            to_char(k.start_at at time zone 'Asia/Bangkok', 'YYYY-MM-DD HH24:MI') as s, to_char(k.end_at at time zone 'Asia/Bangkok', 'YYYY-MM-DD HH24:MI') as e,
-           coalesce(u.name, '') as unit, coalesce(sv.name, '') as service, coalesce(st.display_name, '') as staff, k.addon_codes,
+           coalesce(u.name, '') as unit, coalesce(sv.name, '') as service, coalesce(st.display_name, '') as staff, k.addon_codes, k.service_code, k.session_code,
+           (select tier_for(max(p.weight_kg)) from booking_pets bp join pets p on p.code = bp.pet_code where bp.booking_code = k.code) as tier,
+           coalesce((select array_agg(p.weight_kg) from booking_pets bp join pets p on p.code = bp.pet_code where bp.booking_code = k.code), '{}') as kgs,
            coalesce((select string_agg(p.name, ', ') from booking_pets bp join pets p on p.code = bp.pet_code where bp.booking_code = k.code), '') as pets
     from bookings k join businesses b on b.code = k.business_code
     left join units u on u.code = k.unit_code left join services sv on sv.code = k.service_code left join staff st on st.code = k.staff_code
@@ -73,6 +76,10 @@ export default async function BookingDetail({ params }: { params: Promise<{ code
             {i.staff && <div className="stat"><span>ช่าง</span><b>พี่{i.staff}</b></div>}
             <div className="stat"><span>ราคา</span><b className="num">{baht(i.price)}</b></div>
             {a ? <ActBtn code={i.code} action={a[0]} label={a[1]} big /> : o.status !== 'paid' && ['holding'].includes(i.status) ? <b style={{ fontSize: 14 }}>รอสลิปผ่านก่อน</b> : null}
+            {['holding', 'confirmed'].includes(i.status) && canSee(s, i.business_code) && (
+              <Reschedule p={{ code: i.code, kind: i.kind, business: i.business_code, date: sd, nights: Math.max(1, daysBetween(sd, ed)), service: i.service_code,
+                               addons: i.addon_codes, tier: i.tier, kg: (i.kgs as number[]).map(Number), session: i.session_code }} />
+            )}
           </div>
         );
       })}

@@ -144,7 +144,7 @@ export function Xsell({ rules, biz }: { rules: X[]; biz: B[] }) {
 // ---------- ข้อความ LINE · รับเงินและข้อมูลร้าน ----------
 const MSG: [string, string, string][] = [
   ['msg_paid', 'ยืนยันการจอง', 'ทันทีหลังสลิปผ่าน'], ['msg_reminder', 'เตือนก่อนถึงวัน', 'ตามเวลาที่ตั้ง'], ['msg_slip_rejected', 'สลิปไม่ผ่าน', 'ทันที · พร้อมเหตุผล'],
-  ['msg_groom_done', 'น้องพร้อมกลับ', 'เมื่อช่างกดเสร็จ'], ['msg_cancelled', 'ยกเลิกการจอง', 'เมื่อร้านกดยกเลิก'], ['msg_vaccine', 'ผลตรวจวัคซีน', 'เมื่อร้านตรวจเสร็จ'],
+  ['msg_groom_done', 'น้องพร้อมกลับ', 'เมื่อช่างกดเสร็จ'], ['msg_rescheduled', 'เลื่อนวัน', 'เมื่อร้านเลื่อนวันให้'], ['msg_cancelled', 'ยกเลิกการจอง', 'เมื่อร้านกดยกเลิก'], ['msg_vaccine', 'ผลตรวจวัคซีน', 'เมื่อร้านตรวจเสร็จ'],
 ];
 export function Messages({ values }: { values: Record<string, string> }) {
   const [v, setV] = useState(values);

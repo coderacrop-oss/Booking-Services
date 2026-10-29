@@ -162,7 +162,7 @@ export async function applySetting(s: StaffUser, kind: string, d: D) {
     case 'settings.save': {
       owner(s);
       const ALLOW = ['shop_name', 'legal_name', 'promptpay_id', 'account_name', 'notify_email', 'line_oa_id', 'shop_phone', 'remind_hours_before',
-        'msg_paid', 'msg_reminder', 'msg_slip_rejected', 'msg_groom_done', 'msg_cancelled', 'msg_vaccine'];
+        'msg_paid', 'msg_reminder', 'msg_slip_rejected', 'msg_groom_done', 'msg_cancelled', 'msg_vaccine', 'msg_rescheduled'];
       const v = (d.values ?? {}) as D;
       for (const [k, val] of Object.entries(v)) {
         if (!ALLOW.includes(k)) continue;
