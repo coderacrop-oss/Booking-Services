@@ -23,6 +23,8 @@ type Ev = { type: string; replyToken?: string; source?: { type: string; userId?:
 
 export async function POST(req: NextRequest) {
   const raw = await req.text();
+  // ยังไม่ใส่ LINE_CHANNEL_SECRET: ตอบ 200 ให้กด Verify ผ่าน แต่ไม่ทำอะไร (ตอบการ์ดไม่ได้จนกว่าจะใส่)
+  if (!process.env.LINE_CHANNEL_SECRET) { console.warn('webhook: ยังไม่ได้ตั้ง LINE_CHANNEL_SECRET'); return NextResponse.json({ ok: false, reason: 'no_secret' }); }
   if (!signed(raw, req.headers.get('x-line-signature'))) return new NextResponse('bad signature', { status: 401 });
   const events = ((JSON.parse(raw || '{}').events ?? []) as Ev[]);
   for (const e of events) {
@@ -58,4 +60,9 @@ export async function POST(req: NextRequest) {
     }
   }
   return NextResponse.json({ ok: true });
+}
+
+// เปิดลิงก์ในเบราว์เซอร์เพื่อเช็กว่า deploy แล้ว
+export async function GET() {
+  return NextResponse.json({ ok: true, webhook: 'line', secret: !!process.env.LINE_CHANNEL_SECRET });
 }
