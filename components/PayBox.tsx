@@ -33,15 +33,32 @@ export default function PayBox({ order, qr, account, shop }: { order: Order; qr:
     router.refresh();
   };
 
-  // บันทึก QR เป็นรูป PNG (ไว้เปิดสแกนในแอปธนาคาร)
-  const saveQr = () => {
+  // บันทึก QR เป็นรูปเดียวที่มียอด ชื่อบัญชี และรหัสการจอง (ไว้เปิดสแกนในแอปธนาคาร)
+  // มือถือ: เปิดเมนูแชร์ → "บันทึกรูปภาพ" · ไม่รองรับ (เช่นในแอป LINE บางรุ่น) = ดาวน์โหลด + บอกให้กดค้างที่รูป
+  const [tip, setTip] = useState('');
+  const saveQr = async () => {
     const img = new Image();
-    img.onload = () => {
-      const c = document.createElement('canvas'); c.width = 720; c.height = 720;
-      const g = c.getContext('2d')!; g.fillStyle = '#fff'; g.fillRect(0, 0, 720, 720); g.drawImage(img, 40, 40, 640, 640);
-      const a = document.createElement('a'); a.href = c.toDataURL('image/png'); a.download = `QR-${order.code}.png`; a.click();
-    };
-    img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(qr);
+    img.src = qr;
+    await img.decode().catch(() => {});
+    const W = 720, H = 980, c = document.createElement('canvas'); c.width = W; c.height = H;
+    const g = c.getContext('2d')!;
+    const font = getComputedStyle(document.body).fontFamily;
+    g.fillStyle = '#fff'; g.fillRect(0, 0, W, H); g.fillStyle = '#111'; g.textAlign = 'center';
+    g.font = `700 30px ${font}`; g.fillText(shop, W / 2, 70);
+    g.font = `800 64px ${font}`; g.fillText(baht(order.due_now), W / 2, 150);
+    g.drawImage(img, 80, 190, 560, 560);
+    g.font = `400 28px ${font}`; g.fillStyle = '#555';
+    if (account) g.fillText(`โอนเข้า ${account}`, W / 2, 810);
+    g.fillText(`รหัสการจอง ${order.code}`, W / 2, 860);
+    g.font = `400 22px ${font}`; g.fillText('สแกนด้วยแอปธนาคาร แล้วกลับมาแนบสลิป', W / 2, 920);
+    const blob: Blob | null = await new Promise((ok) => c.toBlob(ok, 'image/png'));
+    if (!blob) return;
+    const f = new File([blob], `QR-${order.code}.png`, { type: 'image/png' });
+    try {
+      if (navigator.canShare?.({ files: [f] })) { await navigator.share({ files: [f] }); return; }
+    } catch (e) { if ((e as Error).name === 'AbortError') return; }
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = f.name; a.click();
+    setTip('ถ้ารูปไม่ถูกบันทึก ให้กดค้างที่รูป QR แล้วเลือก "บันทึกรูปภาพ"');
   };
   const expired = order.status === 'expired' || order.late || left === 0;
   const waiting = order.status === 'pending_review';
@@ -64,8 +81,10 @@ export default function PayBox({ order, qr, account, shop }: { order: Order; qr:
               <div className="sub">สแกนจ่าย · {shop}</div>
               <div className="num" style={{ fontSize: 36, fontWeight: 800 }}>{baht(order.due_now)}</div>
               {left !== null && <div style={{ color: 'var(--red-ink)', fontSize: 14, fontWeight: 700 }}>กันที่ไว้ให้อีก {pad(Math.floor(left / 60))}:{pad(left % 60)} นาที</div>}
-              <div style={{ width: 230, height: 230, border: '2px solid var(--ink)', borderRadius: 16, padding: 10, background: '#fff' }}
-                   dangerouslySetInnerHTML={{ __html: qr || '<div style="display:grid;place-items:center;height:100%;color:#9a9a96">ร้านยังไม่ได้ตั้งเลขพร้อมเพย์</div>' }} />
+              <div style={{ width: 230, height: 230, border: '2px solid var(--ink)', borderRadius: 16, padding: 10, background: '#fff', display: 'grid', placeItems: 'center' }}>
+                {qr ? <img src={qr} alt={`QR พร้อมเพย์ ${baht(order.due_now)}`} style={{ width: '100%', height: '100%' }} />
+                    : <span style={{ color: '#9a9a96', fontSize: 14 }}>ร้านยังไม่ได้ตั้งเลขพร้อมเพย์</span>}
+              </div>
               {account && <div className="sub">โอนเข้า {account}</div>}
             </div>
             <ol className="sub" style={{ paddingLeft: 20 }}>
@@ -73,6 +92,7 @@ export default function PayBox({ order, qr, account, shop }: { order: Order; qr:
               <li>โอนยอดตามที่แสดง</li>
               <li>กลับมาแนบสลิปที่นี่</li>
             </ol>
+            {tip && <div className="warn"><span className="ms">info</span>{tip}</div>}
             {err && <div className="err">{err}</div>}
           </>
         )}
@@ -91,7 +111,7 @@ export default function PayBox({ order, qr, account, shop }: { order: Order; qr:
       {order.status === 'holding' && !expired && (
         <div className="bottombar"><div className="in">
           <input ref={file} type="file" accept="image/*" hidden onChange={(e) => e.target.files?.[0] && upload(e.target.files[0])} />
-          {qr && <button className="btn ghost" onClick={saveQr}><span className="ms">download</span>บันทึก QR</button>}
+          <button className="btn ghost" disabled={!qr} onClick={saveQr}><span className="ms">download</span>บันทึก QR</button>
           <button className="btn red" style={{ flex: 1 }} disabled={busy} onClick={() => file.current?.click()}>
             <span className="ms">upload</span>{busy ? 'กำลังส่ง…' : 'แนบสลิป'}
           </button>
