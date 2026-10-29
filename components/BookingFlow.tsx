@@ -382,7 +382,7 @@ export default function BookingFlow({ cat, pets, loggedIn, today, initial, credi
         {sessAv.data && !open.length && <div className="warn"><span className="ms">info</span>วันนี้ไม่มีรอบ</div>}
         {sessAv.data?.sessions.map((x) => (
           <button key={x.code} className={'card' + (session === x.code ? ' on' : '')} disabled={!x.free} onClick={() => setSession(x.code)}>
-            <span className="t"><b className="num">{x.start}–{x.end}</b><small>{SIZE_TH[x.size_rule]}</small></span>
+            <span className="t"><span className={'sizetag ' + x.size_rule}>{SIZE_TH[x.size_rule]}</span><b className="num">{x.start}–{x.end}</b></span>
             <span className="p num" style={{ fontSize: 14 }}>{x.free ? `เหลือ ${x.left} ที่` : x.reason}</span>
           </button>
         ))}

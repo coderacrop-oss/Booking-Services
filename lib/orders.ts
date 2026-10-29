@@ -84,6 +84,8 @@ export async function createOrder(customer: string, items: CartItem[], acceptedP
           codes.push(bk);
         }
         await enqueue(tx, { order: code, channel: 'email', template: 'new_booking' });
+        // ลูกค้าได้การ์ด "รอโอน" พร้อม QR พร้อมเพย์ในแชท
+        if (!free) await enqueue(tx, { order: code, channel: 'line_push', template: 'booked' });
         if (free) for (const bk of codes) await enqueue(tx, { booking: bk, channel: 'calendar', template: 'confirm' });
         if (free) {
           await enqueue(tx, { order: code, channel: 'line_push', template: 'paid' });
@@ -188,6 +190,7 @@ export async function createOrder(customer: string, items: CartItem[], acceptedP
                        ${tx.json({ flags: chk.flags, ok: chk.ok, ocr: chk.ocr })}, ${purpose}, 'transfer')`;
       if (purpose === 'deposit') await tx`update orders set status = 'pending_review' where code = ${code}`;
       await enqueue(tx, { order: code, channel: 'line_push', template: 'staff_new', payload: { kind: 'slip' } });
+      await enqueue(tx, { order: code, channel: 'line_push', template: 'slip_received' });
       await enqueue(tx, { order: code, channel: 'email', template: 'slip_review' });
       return { payment: pc as string };
     });

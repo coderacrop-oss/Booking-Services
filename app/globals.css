@@ -286,3 +286,8 @@ html, body { overflow-x: hidden; max-width: 100%; }
 .wallet b { font-size: 20px; font-weight: 800; }
 .wallet .dot { position: absolute; top: 10px; right: 10px; width: 8px; height: 8px; border-radius: 4px; background: var(--red); }
 @media print { .noprint, .tabbar { display: none !important; } }
+
+/* ป้ายขนาดน้องของรอบสระ */
+.sizetag{display:inline-block;align-self:flex-start;font-size:12px;font-weight:700;padding:2px 8px;border-radius:999px;background:#EEF0EC;color:#333;margin-bottom:2px}
+.sizetag.small{background:#E3F1FB;color:#1F5FA8}
+.sizetag.large{background:#FDEBD8;color:#9A4A00}
