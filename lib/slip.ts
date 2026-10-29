@@ -14,7 +14,7 @@ export type SlipResult = {
   ref: string | null;
   hash: string;
   amount: number | null;
-  ocr: 'vision' | 'off' | 'quota' | 'error';
+  ocr: 'vision' | 'off' | 'nokey' | 'quota' | 'error';
   flags: string[];          // จุดที่พนักงานต้องดู (ภาษาคน)
   ok: string[];             // จุดที่ตรง
   message?: string;         // ข้อความถึงลูกค้าเมื่อไม่รับ
@@ -59,7 +59,9 @@ export async function readQr(buf: Buffer): Promise<string | null> {
 const ym = () => new Date(Date.now() + 7 * 3600000).toISOString().slice(0, 7).replace('-', '');
 async function ocrText(buf: Buffer): Promise<{ text: string | null; ocr: SlipResult['ocr'] }> {
   const key = process.env.GOOGLE_VISION_API_KEY;
-  if (!key) return { text: null, ocr: 'off' };
+  const [sw] = await sql`select value from settings where key = 'ocr_enabled'`;
+  if (sw?.value === 'off') return { text: null, ocr: 'off' };
+  if (!key) return { text: null, ocr: 'nokey' };
   const k = `ocr_used_${ym()}`;
   const [lim] = await sql`select value from settings where key = 'ocr_month_limit'`;
   const limit = Number(lim?.value ?? 1000) || 0;
@@ -163,7 +165,10 @@ export async function checkSlip(buf: Buffer, o: { due: number; createdAt: Date; 
     const made = new Date(o.createdAt.getTime() + 7 * 3600000).toISOString().slice(0, 10);
     if (d && d < made) flags.push(`วันที่ในสลิป (${d}) ก่อนวันที่จอง`);
   } else {
-    flags.push(ocr === 'quota' ? 'เดือนนี้อ่านสลิปอัตโนมัติครบโควตาแล้ว · ตรวจยอดเอง' : ocr === 'error' ? 'อ่านข้อความในสลิปไม่สำเร็จ · ตรวจยอดเอง' : 'ยังไม่ได้เปิดอ่านสลิปอัตโนมัติ · ตรวจยอดเอง');
+    flags.push(ocr === 'quota' ? 'เดือนนี้อ่านสลิปอัตโนมัติครบโควตาแล้ว · ตรวจยอดเอง'
+      : ocr === 'error' ? 'อ่านข้อความในสลิปไม่สำเร็จ · ตรวจยอดเอง'
+      : ocr === 'nokey' ? 'เปิดอ่านสลิปไว้แล้ว แต่ยังไม่ใส่ key Google Vision · ตรวจยอดเอง'
+      : 'ปิดอ่านสลิปอัตโนมัติอยู่ · ตรวจยอดเอง');
     if (!qr) {
       // ไม่มีทั้ง QR และ OCR → บอกไม่ได้ว่าเป็นสลิป · ไม่รับไว้ก่อน ให้ถ่ายใหม่ทั้งใบ
       return { verdict: 'not_slip', ref, hash, amount: null, ocr, flags, ok,

@@ -134,6 +134,14 @@ export async function applySetting(s: StaffUser, kind: string, d: D) {
                 values (${biz}, ${unit}, ${sess}, ${from}, ${to}, ${str(d.reason, 80) || null})`;
       return {};
     }
+    case 'calendar.save': {
+      // รหัสปฏิทิน Google ของแต่ละธุรกิจ (ไม่ใช่ค่าลับ · แชร์ปฏิทินให้อีเมล service account ก่อน)
+      const biz = str(d.business_code, 40); need(s, biz);
+      const cal = str(d.calendar_id, 200);
+      if (cal && !/^[\w.+-]+@[\w.-]+$/.test(cal)) throw new BookingError('bad', 'รหัสปฏิทินมีรูปแบบเหมือนอีเมล เช่น xxxx@group.calendar.google.com');
+      await sql`update businesses set calendar_id = ${cal || null} where code = ${biz}`;
+      return {};
+    }
     case 'closure.delete': {
       const [c] = await sql`select business_code from closures where id = ${Number(d.id)}`;
       if (!c) throw new BookingError('not_found', 'ไม่พบรายการ'); need(s, c.business_code);
@@ -162,13 +170,16 @@ export async function applySetting(s: StaffUser, kind: string, d: D) {
     case 'settings.save': {
       owner(s);
       const ALLOW = ['liff_id', 'shop_name', 'legal_name', 'promptpay_id', 'account_name', 'notify_email', 'line_oa_id', 'shop_phone', 'remind_hours_before',
-        'msg_paid', 'msg_reminder', 'msg_slip_rejected', 'msg_groom_done', 'msg_cancelled', 'msg_vaccine', 'msg_rescheduled'];
+        'msg_paid', 'msg_reminder', 'msg_slip_rejected', 'msg_groom_done', 'msg_cancelled', 'msg_vaccine', 'msg_rescheduled',
+        'ocr_enabled', 'ocr_month_limit'];
       const v = (d.values ?? {}) as D;
       for (const [k, val] of Object.entries(v)) {
         if (!ALLOW.includes(k)) continue;
         let x = str(val, 200);
         if (k === 'promptpay_id' && x && !/^(\d{10}|\d{13}|\d{15})$/.test(x.replace(/\D/g, ''))) throw new BookingError('bad', 'เลขพร้อมเพย์ต้องเป็นเบอร์ 10 หลัก หรือเลข 13/15 หลัก');
         if (k === 'promptpay_id') x = x.replace(/\D/g, '');
+        if (k === 'ocr_month_limit' && !/^\d{1,6}$/.test(x)) throw new BookingError('bad', 'ใส่จำนวนรูปต่อเดือนเป็นตัวเลข');
+        if (k === 'ocr_enabled' && x !== 'on' && x !== 'off') throw new BookingError('bad', 'ค่าต้องเป็น on หรือ off');
         if (k === 'liff_id' && x && !/^\d{6,}-[A-Za-z0-9]{4,}$/.test(x)) throw new BookingError('bad', 'LIFF ID ต้องเป็นรูปแบบ 2001234567-AbCdEfGh');
         if (k.startsWith('msg_')) x = x === 'off' ? 'off' : 'on';
         await sql`insert into settings (key, value) values (${k}, ${x}) on conflict (key) do update set value = excluded.value`;
