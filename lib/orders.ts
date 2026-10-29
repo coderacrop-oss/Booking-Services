@@ -5,6 +5,7 @@ import { enqueue, sendDue } from './notify';
 import { imageType, putFile } from './storage';
 import { baht, todayTH } from './thaidate';
 import { checkSlip } from './slip';
+import { BOOK_AHEAD_MONTHS, lastBookable, maxNights } from './rules';
 import { canSee, type StaffUser } from './staff';
 import type { CartItem, OrderView } from './types';
 
@@ -19,6 +20,9 @@ function dbError(e: unknown): never {
   if (/size_mismatch/.test(m)) throw new BookingError('size_mismatch', 'ขนาดน้องไม่ตรงรอบ');
   if (/session_time_mismatch/.test(m)) throw new BookingError('session_day', 'รอบนี้ไม่เปิดวันที่เลือก');
   if (/too_many_pets|pet_too_big|too_many_guests/.test(m)) throw new BookingError('over_limit', 'เกินจำนวนที่รับได้');
+  const pb = /pet_busy: (.+)/.exec(m);
+  if (pb) throw new BookingError('pet_busy', pb[1]);
+  if (/quota_full/.test(m)) throw new BookingError('quota_full', 'ช่างรับคิวครบแล้ววันนี้ เลือกเวลาหรือวันอื่น');
   throw e;
 }
 
@@ -269,6 +273,7 @@ export async function bookingAction(staffUser: StaffUser, code: string, action: 
     if (!b) throw new BookingError('not_found', 'ไม่พบการจองนี้');
     if (!canSee(staffUser, b.business_code)) throw new BookingError('forbidden', 'ไม่มีสิทธิ์ในธุรกิจนี้');
     if (action === 'cancel') {
+      if (staffUser.role === 'staff') throw new BookingError('forbidden', 'ยกเลิกการจองได้เฉพาะเจ้าของหรือผู้จัดการ');
       if (!['holding', 'confirmed', 'checked_in', 'in_progress'].includes(b.status)) throw new BookingError('bad_status', 'ยกเลิกไม่ได้ในสถานะนี้');
       await tx`update bookings set status = 'cancelled' where code = ${code}`;
       // ทุกรายการในทริปยกเลิกแล้ว → ทริปยกเลิก
@@ -301,6 +306,7 @@ export async function reschedule(staffUser: StaffUser, code: string, p: { date?:
   if (!p.date || !DATE.test(p.date)) throw new BookingError('bad_date', 'เลือกวันใหม่');
   const date: string = p.date;
   if (date < todayTH()) throw new BookingError('bad_date', 'เลือกวันที่ยังไม่ผ่าน');
+  if (date > lastBookable(todayTH())) throw new BookingError('date_too_far', `เลื่อนได้ไม่เกิน ${BOOK_AHEAD_MONTHS} เดือนข้างหน้า`);
   const pushIds: number[] = [];
   try {
     await sql.begin(async (tx) => {
@@ -315,7 +321,8 @@ export async function reschedule(staffUser: StaffUser, code: string, p: { date?:
       let start: string, end: string, session: string | null = b.session_code, staff: string | null = b.staff_code;
       if (b.kind === 'stay') {
         const n = Math.round(Number(p.nights || 0)) || Math.max(1, Math.round(Number(b.mins) / 1440));
-        if (n < 1 || n > 60) throw new BookingError('bad', 'จำนวนคืนไม่ถูกต้อง');
+        const [{ people }] = await tx`select max_people is not null as people from units where code = ${b.unit_code}`;
+        if (n < 1 || n > maxNights(people)) throw new BookingError('bad', `จำนวนคืนต้องอยู่ระหว่าง 1–${maxNights(people)} คืน`);
         const [{ closed }] = await tx`select exists (select 1 from generate_series(${date}::date, ${date}::date + ${n - 1}::int, '1 day') d
                                         where is_closed(${b.business_code}, ${b.unit_code}, null, d::date)) as closed`;
         if (closed) throw new BookingError('closed', 'มีวันที่ร้านปิดหรือห้องปิดอยู่ในช่วงใหม่');
@@ -345,6 +352,12 @@ export async function reschedule(staffUser: StaffUser, code: string, p: { date?:
         const [{ e }] = await tx`select to_char((${start}::timestamptz + make_interval(mins => ${b.mins})) at time zone 'Asia/Bangkok', 'YYYY-MM-DD HH24:MI') || '+07' as e`;
         end = e;
       }
+      // วัคซีนต้องใช้ได้ถึงวันใหม่ (ธุรกิจที่ต้องใช้วัคซีน)
+      const [vx] = await tx`select string_agg(pt.name, ', ') as names from booking_pets bp join pets pt on pt.code = bp.pet_code
+                            join businesses bz on bz.code = ${b.business_code}
+                            where bp.booking_code = ${code} and bz.need_vaccine
+                              and coalesce((select max(v.expires_on) from pet_vaccines v where v.pet_code = pt.code and v.status = 'approved'), '1900-01-01') < ${date}::date`;
+      if (vx?.names) throw new BookingError('vaccine_required', `${vx.names} วัคซีนหมดอายุก่อนวันใหม่`);
       await tx`update bookings set start_at = ${start}::timestamptz, end_at = ${end}::timestamptz, session_code = ${session}, staff_code = ${staff} where code = ${code}`;
       // การเตือนเดิมยกเลิก ตั้งใหม่ตามวันใหม่
       await tx`update notifications set status = 'sent', last_error = 'ข้าม: เลื่อนวันแล้ว', sent_at = now()

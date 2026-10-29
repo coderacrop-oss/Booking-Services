@@ -167,7 +167,8 @@ async function runCalendar(j: Job) {
       const id = await insertEvent(r.calendar_id, {
         id: eventId(r.code),
         summary: `${r.item}${r.pets ? ' · ' + r.pets : ''} (${r.code})`,
-        description: `${r.customer}${r.phone ? ' · ' + r.phone : ''}\n${r.biz} · ${baht(Number(r.price))}`,
+        // ไม่ใส่เบอร์โทรและยอดเงินในปฏิทิน (ปฏิทินอาจแชร์ให้หลายคนเห็น)
+        description: `${r.biz} · ลูกค้า ${r.customer}\nดูรายละเอียดในหลังบ้าน`,
         start: r.s_iso, end: r.e_iso,
       });
       await sql`update bookings set calendar_event_id = ${id} where code = ${r.code}`;

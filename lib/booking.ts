@@ -224,7 +224,10 @@ export async function quote(customer: string, items: CartItem[]): Promise<Quote>
       needVaccine(b, pets, it.date);
       const s = (await sessionAvailability(b.code, it.date, pets.map((p) => Number(p.weight_kg)))).find((x) => x.code === it.session);
       if (!s) throw new BookingError('session_invalid', 'ไม่มีรอบนี้ในวันที่เลือก');
-      if (!s.free) throw new BookingError('session_full', `รอบ ${s.start}: ${s.reason}`);
+      if (!s.free) {
+        const code = /ขนาด/.test(s.reason ?? '') ? 'size_mismatch' : /ปิด/.test(s.reason ?? '') ? 'closed_day' : /เลยเวลา/.test(s.reason ?? '') ? 'too_late' : 'session_full';
+        throw new BookingError(code, `รอบ ${s.start}: ${s.reason}`);
+      }
       const [ps] = await sql`select price from pool_sessions where code = ${it.session}`;
       lines.push({ label: `รอบ ${s.start}–${s.end} × ${pets.length} ตัว`, amount: Number(ps.price) * pets.length });
       title = `สระ ${s.start} · ${pets.map((p) => p.name).join(', ')}`;
@@ -238,6 +241,7 @@ export async function quote(customer: string, items: CartItem[]): Promise<Quote>
       const date = it.start.slice(0, 10), time = it.start.slice(11, 16);
       const d = await groomDuration(b.code, it.service, it.addons, pet.tier_code);
       const av = await slotAvailability(b.code, date, it.service, it.addons, pet.tier_code);
+      if (av.closed) throw new BookingError('closed_day', 'ร้านปิดวันที่เลือก');
       // ช่างที่เลือกต้องว่างเวลานั้น (เช็กกับคิวจริงอีกครั้งตอนสร้างการจอง)
       const ok = av.slots.some((s) => s.start === time) &&
         (await slotFreeFor(it.staff, date, time, av.minutes));
