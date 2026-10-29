@@ -32,19 +32,36 @@ async function setting(key: string, fallback: string) {
 }
 
 // ---------- สร้างการจอง (กันที่ไว้ hold_minutes นาที) ----------
-export async function createOrder(customer: string, items: CartItem[], acceptedPolicy: boolean) {
+// เครดิตคงเหลือ (เครดิตที่ได้รับใช้ได้ 6 เดือน · ใช้แล้วหักออก)
+export async function creditBalance(customer: string): Promise<number> {
+  const [r] = await sql`select coalesce(sum(amount) filter (where amount < 0 or created_at > now() - interval '6 months'), 0)::numeric as bal
+                        from credits where customer_code = ${customer}`;
+  return Math.max(0, Number(r.bal));
+}
+
+export async function createOrder(customer: string, items: CartItem[], acceptedPolicy: boolean, useCredit = false) {
   if (!acceptedPolicy) throw new BookingError('policy', 'กรุณาอ่านและติ๊กยอมรับเงื่อนไขการจองและยกเลิก');
   await sql`select expire_holds()`;
   const q = await quote(customer, items);               // ตรวจทุกอย่างก่อน · ชนกันจริงฐานข้อมูลกันให้อีกชั้น
   const hold = Number(await setting('hold_minutes', '30')) || 30;
   const policy = await setting('policy_version', '');
-  const free = q.due_now === 0;
+  // ใช้เครดิตหักยอดที่ต้องจ่ายตอนจอง (นับเป็นเงินที่ร้านได้รับแล้ว)
+  const credit = useCredit ? Math.min(await creditBalance(customer), q.due_now) : 0;
+  const free = q.due_now - credit <= 0.005;
   try {
     return await sql.begin(async (tx) => {
         const [{ code }] = await tx`select next_code('T', ${todayTH()}::date) as code`;
-        await tx`insert into orders (code, customer_code, status, total, due_now, hold_until, policy_version, paid_at)
+        await tx`insert into orders (code, customer_code, status, total, due_now, hold_until, policy_version, paid_at, paid_amount, balance_due, balance_due_by)
                  values (${code}, ${customer}, ${free ? 'paid' : 'holding'}, ${q.total}, ${q.due_now},
-                         ${free ? null : tx`now() + make_interval(mins => ${hold})`}, ${policy}, ${free ? tx`now()` : null})`;
+                         ${free ? null : tx`now() + make_interval(mins => ${hold})`}, ${policy}, ${free ? tx`now()` : null},
+                         ${credit}, ${q.balance}, ${q.balance_by})`;
+        if (credit > 0) {
+          // ล็อกแถวเครดิตของลูกค้า กันใช้ซ้อนสองทริปพร้อมกัน
+          await tx`select pg_advisory_xact_lock(hashtext('credit|' || ${customer}))`;
+          const [{ bal }] = await tx`select coalesce(sum(amount) filter (where amount < 0 or created_at > now() - interval '6 months'), 0)::numeric as bal from credits where customer_code = ${customer}`;
+          if (Number(bal) + 0.005 < credit) throw new BookingError('credit', 'เครดิตไม่พอ ลองใหม่อีกครั้ง');
+          await tx`insert into credits (customer_code, amount, order_code, note, created_by) values (${customer}, ${-credit}, ${code}, 'ใช้เครดิตตอนจอง', 'system')`;
+        }
         const codes: string[] = [];
         for (let i = 0; i < items.length; i++) {
           const it = items[i], qi = q.items[i];
@@ -68,7 +85,21 @@ export async function createOrder(customer: string, items: CartItem[], acceptedP
         }
         await enqueue(tx, { order: code, channel: 'email', template: 'new_booking' });
         if (free) for (const bk of codes) await enqueue(tx, { booking: bk, channel: 'calendar', template: 'confirm' });
-        return { order: code as string, bookings: codes, due_now: q.due_now, total: q.total, paid: free };
+        if (free) {
+          await enqueue(tx, { order: code, channel: 'line_push', template: 'paid' });
+          if (q.balance > 0 && q.balance_by) {
+            for (const d of [3, 0]) {
+              const at = new Date(`${q.balance_by}T09:00:00+07:00`).getTime() - d * 86400000;
+              if (at > Date.now()) await enqueue(tx, { order: code, channel: 'line_push', template: 'balance_due', runAfter: new Date(at).toISOString() });
+            }
+          }
+          const remindH = Number(await setting('remind_hours_before', '24')) || 24;
+          for (let i = 0; i < codes.length; i++) {
+            const when = new Date(new Date(q.items[i].start_at.replace(' ', 'T').replace('+07', '+07:00')).getTime() - remindH * 3600000);
+            if (when.getTime() > Date.now()) await enqueue(tx, { booking: codes[i], channel: 'line_push', template: 'reminder', runAfter: when.toISOString() });
+          }
+        }
+        return { order: code as string, bookings: codes, due_now: q.due_now, total: q.total, paid: free, credit_used: credit };
       });
     } catch (e) {
       dbError(e);
@@ -78,7 +109,7 @@ export async function createOrder(customer: string, items: CartItem[], acceptedP
   // ---------- ทริปของลูกค้า ----------
   export async function getOrder(customer: string, code: string): Promise<OrderView | null> {
     const [o] = await sql`
-      select code, status, total, due_now, paid_amount, refund_status, refund_amount, balance_due, balance_due_by::text, to_char(hold_until at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as hold_until,
+      select code, status, total, due_now, paid_amount, refund_status, refund_amount, balance_due, balance_due_by::text, change_request, to_char(hold_until at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as hold_until,
              (status = 'holding' and hold_until < now()) as late,
              (select json_build_object('status', p.status, 'reason', p.reject_reason) from payments p
                where p.order_code = o.code order by p.created_at desc limit 1) as last_payment
@@ -108,18 +139,23 @@ export async function createOrder(customer: string, items: CartItem[], acceptedP
     const type = imageType(file);
     if (!type) throw new BookingError('not_image', 'แนบได้เฉพาะรูป JPG PNG หรือ WEBP');
     await sql`select expire_holds()`;
-    const [o] = await sql`select code, status, due_now, paid_amount, created_at, slip_dup_count, reject_count from orders where code = ${code} and customer_code = ${customer}`;
+    const [o] = await sql`select code, status, due_now, paid_amount, balance_due, created_at, slip_dup_count, reject_count,
+                                 exists (select 1 from payments where order_code = orders.code and status = 'pending') as has_pending
+                          from orders where code = ${code} and customer_code = ${customer}`;
     if (!o) throw new BookingError('not_found', 'ไม่พบการจองนี้');
     if (o.status === 'expired') throw new BookingError('expired', 'หมดเวลากันที่แล้ว จองใหม่อีกครั้ง');
-    if (o.status !== 'holding') throw new BookingError('bad_status', 'การจองนี้แนบสลิปแล้ว');
-  
+    // ยอดคงเหลือ (Villa) แนบได้หลังมัดจำผ่านแล้ว
+    const purpose = o.status === 'paid' && Number(o.balance_due) > 0 ? 'balance' : 'deposit';
+    if (purpose === 'deposit' && o.status !== 'holding') throw new BookingError('bad_status', 'การจองนี้แนบสลิปแล้ว');
+    if (purpose === 'balance' && o.has_pending) throw new BookingError('bad_status', 'แนบสลิปยอดคงเหลือแล้ว รอร้านตรวจ');
+
     // คัดกรองก่อนรับ: ไม่ใช่สลิป / สลิปซ้ำ = ไม่รับ ไม่แจ้งร้าน (นับครั้งไว้บอกร้านตอนส่งสลิปที่ผ่าน)
     const [account, promptpay] = await Promise.all([setting('account_name', ''), setting('promptpay_id', '')]);
-    const left = Math.round((Number(o.due_now) - Number(o.paid_amount)) * 100) / 100;
+    const left = purpose === 'balance' ? Number(o.balance_due) : Math.round((Number(o.due_now) - Number(o.paid_amount)) * 100) / 100;
     const chk = await checkSlip(file, { due: left, createdAt: new Date(o.created_at), account, promptpay });
     if (chk.verdict !== 'review') {
       // ส่งสลิปเดิมที่ร้านกดไม่พบเงินไปแล้ว = ยกเลิกการจอง (ระบบเดิม M19.1)
-      if (chk.dupOf?.order === code && chk.dupOf.status === 'rejected') {
+      if (purpose === 'deposit' && chk.dupOf?.order === code && chk.dupOf.status === 'rejected') {
         const ids: number[] = [];
         await sql.begin(async (tx) => {
           await tx`update orders set status = 'cancelled', cancel_source = 'slip', hold_until = null, slip_dup_count = slip_dup_count + 1 where code = ${code} and status = 'holding'`;
@@ -132,7 +168,8 @@ export async function createOrder(customer: string, items: CartItem[], acceptedP
       await sql`update orders set slip_dup_count = slip_dup_count + 1 where code = ${code}`;
       throw new BookingError(chk.verdict === 'duplicate' ? 'slip_duplicate' : 'not_slip', chk.message || 'แนบสลิปไม่สำเร็จ');
     }
-    if (Number(o.paid_amount) > 0) chk.flags.push(`ได้รับไปแล้ว ${baht(Number(o.paid_amount))} · ใบนี้ควรเป็นส่วนที่ขาด ${baht(left)}`);
+    if (purpose === 'balance') chk.ok.push('สลิปยอดคงเหลือ (มัดจำผ่านแล้ว)');
+    else if (Number(o.paid_amount) > 0) chk.flags.push(`ได้รับไปแล้ว ${baht(Number(o.paid_amount))} · ใบนี้ควรเป็นส่วนที่ขาด ${baht(left)}`);
     if (o.reject_count > 0) chk.flags.push(`สลิปของการจองนี้เคยไม่ผ่าน ${o.reject_count} ครั้ง · ไม่ผ่านอีกครั้งระบบจะยกเลิก`);
     if (o.slip_dup_count > 0) chk.flags.push(`ลูกค้าเคยส่งรูปที่ไม่ผ่าน/สลิปซ้ำ ${o.slip_dup_count} ครั้ง`);
     const ext = type.split('/')[1];
@@ -141,13 +178,15 @@ export async function createOrder(customer: string, items: CartItem[], acceptedP
     try {
       return await sql.begin(async (tx) => {
       // ล็อกทริปไว้ กันกดแนบซ้ำพร้อมกัน
-      const [cur] = await tx`select status from orders where code = ${code} for update`;
-      if (cur.status !== 'holding') throw new BookingError('bad_status', 'การจองนี้แนบสลิปแล้ว');
+      const [cur] = await tx`select status, exists (select 1 from payments where order_code = ${code} and status = 'pending') as pend from orders where code = ${code} for update`;
+      if (purpose === 'deposit' && cur.status !== 'holding') throw new BookingError('bad_status', 'การจองนี้แนบสลิปแล้ว');
+      if (purpose === 'balance' && (cur.status !== 'paid' || cur.pend)) throw new BookingError('bad_status', 'แนบสลิปยอดคงเหลือแล้ว รอร้านตรวจ');
       const [{ pc }] = await tx`select next_code('PAY') as pc`;
-      await tx`insert into payments (code, order_code, amount_due, slip_file, slip_ref, slip_hash, ocr_amount, checks)
+      await tx`insert into payments (code, order_code, amount_due, slip_file, slip_ref, slip_hash, ocr_amount, checks, purpose, method)
                values (${pc}, ${code}, ${left}, ${path}, ${chk.ref}, ${chk.hash}, ${chk.amount},
-                       ${tx.json({ flags: chk.flags, ok: chk.ok, ocr: chk.ocr })})`;
-      await tx`update orders set status = 'pending_review' where code = ${code}`;
+                       ${tx.json({ flags: chk.flags, ok: chk.ok, ocr: chk.ocr })}, ${purpose}, 'transfer')`;
+      if (purpose === 'deposit') await tx`update orders set status = 'pending_review' where code = ${code}`;
+      await enqueue(tx, { order: code, channel: 'line_push', template: 'staff_new', payload: { kind: 'slip' } });
       await enqueue(tx, { order: code, channel: 'email', template: 'slip_review' });
       return { payment: pc as string };
     });
@@ -203,6 +242,24 @@ export async function reviewPayment(staffUser: StaffUser, payment: string, actio
       }
 
       if (p.status !== 'pending') throw new BookingError('done', 'สลิปนี้ตรวจไปแล้ว · กด "แก้ผล" ถ้าต้องการเปลี่ยน');
+
+      if (p.purpose === 'balance') {
+        // สลิปยอดคงเหลือ: ผ่าน/บางส่วน ลดยอดค้าง · ไม่ผ่าน แจ้งให้แนบใหม่ (การจองยังยืนยันอยู่)
+        const owe = Number(p.amount_due);
+        if (action === 'reject') {
+          if (!reason) throw new BookingError('reason', 'เลือกเหตุผลที่สลิปไม่ผ่าน');
+          await tx`update payments set status = 'rejected', amount_slip = ${amountSlip}, reject_reason = ${reason}, reject_kind = ${rejectKind}, reviewed_by = ${staff}, reviewed_at = now() where code = ${payment}`;
+          pushIds.push(await enqueue(tx, { order: p.order_code, channel: 'line_push', template: 'balance_due', payload: { reason } }));
+          return;
+        }
+        const amt = amountSlip ?? owe;
+        if (action === 'approve' && amt + 0.005 < owe) throw new BookingError('short', `ยอดขาด ${baht(owe - amt)} · กด "ได้บางส่วน"`);
+        await tx`update payments set status = ${action === 'approve' ? 'approved' : 'partial'}, amount_slip = ${amt}, reviewed_by = ${staff}, reviewed_at = now() where code = ${payment}`;
+        await tx`update orders set balance_due = greatest(0, balance_due - ${amt}), paid_amount = paid_amount + ${amt} where code = ${p.order_code}`;
+        if (action === 'partial') pushIds.push(await enqueue(tx, { order: p.order_code, channel: 'line_push', template: 'balance_due' }));
+        else pushIds.push(await enqueue(tx, { order: p.order_code, channel: 'line_push', template: 'paid', payload: { balance: true } }));
+        return;
+      }
       if (p.order_status !== 'pending_review') throw new BookingError('bad_status', 'การจองนี้ไม่ได้รอตรวจสลิป');
 
       if (action === 'approve') {
@@ -211,10 +268,17 @@ export async function reviewPayment(staffUser: StaffUser, payment: string, actio
         if (total + 0.005 < due) throw new BookingError('short', `ยอดรวมที่ได้ ${baht(total)} ยังขาด ${baht(due - total)} · กด "ได้บางส่วน" เพื่อขอส่วนที่ขาด`);
         await tx`update payments set status = 'approved', amount_slip = ${amt}, reviewed_by = ${staff}, reviewed_at = now() where code = ${payment}`;
         await tx`update orders set status = 'paid', paid_at = now(), hold_until = null, paid_amount = ${total} where code = ${p.order_code}`;
+        // ยอดคงเหลือ (Villa): เตือนก่อนครบกำหนด 3 วัน และวันครบกำหนด 09:00
+        const [od] = await tx`select balance_due, balance_due_by::text as by from orders where code = ${p.order_code}`;
+        if (Number(od.balance_due) > 0 && od.by) {
+          for (const d of [3, 0]) {
+            const at = new Date(`${od.by}T09:00:00+07:00`).getTime() - d * 86400000;
+            if (at > Date.now()) await enqueue(tx, { order: p.order_code, channel: 'line_push', template: 'balance_due', runAfter: new Date(at).toISOString() });
+          }
+        }
         const bk = await tx`update bookings set status = 'confirmed' where order_code = ${p.order_code} and status = 'holding'
                             returning code, start_at`;
         pushIds.push(await enqueue(tx, { order: p.order_code, channel: 'line_push', template: 'paid' }));
-        await enqueue(tx, { order: p.order_code, channel: 'email', template: 'paid', toCustomer: true });
         for (const b of bk) {
           await enqueue(tx, { booking: b.code, channel: 'calendar', template: 'confirm' });
           const when = new Date(new Date(b.start_at).getTime() - remindH * 3600000);

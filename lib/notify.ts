@@ -21,10 +21,17 @@ export async function enqueue(tx: Tx, n: { order?: string; booking?: string; pet
     values (${n.order ?? null}, ${n.booking ?? null}, ${n.pet ?? null}, ${n.channel}, ${n.template},
             ${tx.json((n.payload ?? {}) as never)}, coalesce(${n.runAfter ?? null}::timestamptz, now()), ${n.toCustomer ?? false})
     returning id`;
+  // ลูกค้าที่กรอกอีเมล ได้สำเนาทางอีเมลด้วย (ไม่มีอีเมล = ข้ามตอนส่ง)
+  if (n.channel === 'line_push' && EMAIL_COPY.includes(n.template)) {
+    await tx`insert into notifications (order_code, booking_code, channel, template, payload, run_after, to_customer)
+             values (${n.order ?? null}, ${n.booking ?? null}, 'email', ${n.template}, ${tx.json((n.payload ?? {}) as never)},
+                     coalesce(${n.runAfter ?? null}::timestamptz, now()), true)`;
+  }
   return r.id as number;
 }
+const EMAIL_COPY: Template[] = ['paid', 'cancelled', 'rescheduled', 'reminder', 'refund'];
 
-type Job = { id: number; order_code: string | null; booking_code: string | null; pet_code: string | null; customer_code: string | null; channel: Channel; template: Template; payload: Record<string, unknown> };
+type Job = { id: number; order_code: string | null; booking_code: string | null; pet_code: string | null; customer_code: string | null; channel: Channel; template: Template; payload: Record<string, unknown>; to_customer: boolean; tries: number };
 
 // รายการจองที่เกี่ยวกับงานนี้
 async function bookingsOf(j: Job) {
@@ -52,7 +59,7 @@ const MSG_KEY: Partial<Record<Template, string>> = {
   paid: 'msg_paid', reminder: 'msg_reminder', slip_rejected: 'msg_slip_rejected', groom_done: 'msg_groom_done',
   cancelled: 'msg_cancelled', vaccine_ok: 'msg_vaccine', vaccine_rejected: 'msg_vaccine', rescheduled: 'msg_rescheduled',
 };
-async function lineFor(j: Job): Promise<{ to: string; text: string; card?: Card } | 'skip'> {
+async function lineFor(j: Job, forEmail = false): Promise<{ to: string; text: string; card?: Card } | 'skip'> {
   const key = MSG_KEY[j.template];
   if (key) { const [o] = await sql`select value from settings where key = ${key}`; if (o?.value === 'off') return 'skip'; }
   const name = await shopName();
@@ -74,9 +81,10 @@ async function lineFor(j: Job): Promise<{ to: string; text: string; card?: Card 
   const [c] = await sql`select c.line_user_id, o.status, o.code, o.total, o.due_now, o.paid_amount, o.refund_status, o.refund_amount,
                                o.balance_due, o.balance_due_by::text from customers c join orders o on o.customer_code = c.code
                         where o.code = coalesce(${j.order_code}, (select order_code from bookings where code = ${j.booking_code}))`;
-  if (!c?.line_user_id) throw new Error('ลูกค้าไม่มี LINE userId');
+  if (!c?.line_user_id && !forEmail) throw new Error(NO_LINE);
   // ตรวจสถานะล่าสุดก่อนส่ง (ข้อความค้างคิวนาน ๆ ห้ามส่งของที่ไม่จริงแล้ว)
   if (!stillTrue(j.template, c.status, rows.map((r) => r.status))) return 'skip';
+  if (j.template === 'balance_due' && !(Number(c.balance_due) > 0)) return 'skip';
   const list = rows.map((r) => `• ${r.biz} ${r.item}${r.pets ? ' · ' + r.pets : ''}\n  ${thDate(r.d)} ${r.t} (${r.code})`).join('\n');
   const items = rows.map((r) => ({ business: r.business_code, color: r.color, type: r.booking_type, biz: `${r.biz} · ${r.code}`, title: `${r.item}${r.pets ? ' · ' + r.pets : ''}`, when: `${thDate(r.d)} · ${r.t}` }));
   const url = await appLink(`/me/b/${c.code}`);
@@ -110,7 +118,31 @@ async function lineFor(j: Job): Promise<{ to: string; text: string; card?: Card 
   };
   const m = T[j.template];
   if (!m) return 'skip';
-  return { to: c.line_user_id, text: m[0], card: m[1] };
+  return { to: c.line_user_id ?? '', text: m[0], card: m[1] };
+}
+const NO_LINE = 'ลูกค้าไม่มี LINE userId';
+
+// แจ้งพนักงานใน LINE (สลิปรอตรวจ) · เฉพาะพนักงานที่ผูก LINE แล้วและเห็นธุรกิจนั้น
+async function staffPush(j: Job): Promise<'sent' | 'skip'> {
+  const [o] = await sql`select value from settings where key = 'msg_staff_slip'`;
+  if (o?.value === 'off') return 'skip';
+  const rows = await bookingsOf(j);
+  if (!rows.length) return 'skip';
+  const biz = [...new Set(rows.map((r) => r.business_code as string))];
+  const staff = await sql`select line_user_id from staff where invite_status = 'active' and line_user_id is not null
+                          and (role = 'owner' or 'all' = any (businesses) or businesses && ${biz}::text[])`;
+  if (!staff.length) return 'skip';
+  const name = await shopName();
+  const req = j.payload.kind === 'request';
+  const url = await appLink(req ? `/admin/b/${rows[0].order_code}` : '/admin/slips');
+  const head = req ? `ลูกค้า${String(j.payload.text ?? 'มีคำขอ')}` : 'สลิปรอตรวจ';
+  const text = `${name}: ${head} · ${rows[0].customer}\n` + rows.map((r) => `• ${r.biz} ${r.item} ${thDate(r.d)} ${r.t}`).join('\n');
+  for (const s of staff) {
+    await pushMessage(s.line_user_id, [{ type: 'flex', altText: text.slice(0, 380), contents: flexCard({ head: `${name} · หลังบ้าน`, title: head, body: rows[0].customer,
+      items: rows.map((r) => ({ business: r.business_code, color: r.color, type: r.booking_type, biz: `${r.biz} · ${r.code}`, title: r.item, when: `${thDate(r.d)} · ${r.t}` })),
+      button: url ? { label: req ? 'เปิดการจอง' : 'ตรวจสลิป', url } : undefined }) }]);
+  }
+  return 'sent';
 }
 
 // ข้อความแต่ละแบบยังจริงอยู่ไหม ณ ตอนส่ง
@@ -135,6 +167,17 @@ function refundText(c: any) {
     : `ร้านกำลังดำเนินการคืนเงิน ${a}`;
 }
 
+// อีเมลถึงลูกค้า: ใช้ข้อความเดียวกับ LINE (ส่งเมื่อมีอีเมล · สำรองเมื่อ LINE ส่งไม่ได้)
+async function customerEmail(j: Job): Promise<{ to: string; subject: string; text: string } | 'skip'> {
+  const [c] = await sql`select c.email from customers c join orders o on o.customer_code = c.code
+                        where o.code = coalesce(${j.order_code}, (select order_code from bookings where code = ${j.booking_code}))`;
+  if (!c?.email) return 'skip';
+  const m = await lineFor({ ...j, channel: 'line_push' }, true).catch(() => 'skip' as const);
+  if (m === 'skip') return 'skip';
+  const url = m.card?.button?.url;
+  return { to: c.email, subject: m.card?.head ?? (await shopName()), text: m.text + (url ? `\n\n${m.card?.button?.label ?? 'เปิด'}: ${url}` : '') };
+}
+
 async function emailFor(j: Job): Promise<{ subject: string; text: string } | 'skip'> {
   const name = await shopName();
   if (j.template === 'delete_request') {
@@ -150,6 +193,7 @@ async function emailFor(j: Job): Promise<{ subject: string; text: string } | 'sk
   const list = rows.map((r) => `- ${r.biz} · ${r.item}${r.pets ? ' · ' + r.pets : ''} · ${thDate(r.d)} ${r.t} · ${baht(Number(r.price))} (${r.code})`).join('\n');
   const who = `${rows[0].customer}${rows[0].phone ? ' · ' + rows[0].phone : ''}`;
   if (j.template === 'new_booking') return { subject: `[${name}] จองใหม่ · ${who}`, text: `${who} จองแล้ว รอแนบสลิป\n${list}` };
+  if (j.template === 'staff_new' && j.payload.kind === 'request') return { subject: `[${name}] ลูกค้า${String(j.payload.text ?? 'มีคำขอ')} · ${who}`, text: `${who}: ${String(j.payload.text ?? '')}\n${list}\nเปิดหลังบ้าน → การจองนี้ เพื่อเลื่อนหรือยกเลิกและคืนเงินตามเงื่อนไข` };
   if (j.template === 'slip_review') return { subject: `[${name}] สลิปรอตรวจ · ${who}`, text: `${who} แนบสลิปแล้ว\n${list}\nเปิดหลังบ้าน → สลิป เพื่อตรวจ` };
   return 'skip';
 }
@@ -195,15 +239,21 @@ export async function sendDue(limit = 20, onlyId?: number): Promise<{ sent: numb
                    where status = 'queued' and run_after <= now() and channel in ${sql(ch)}
                      and (${onlyId ?? null}::bigint is null or id = ${onlyId ?? null})
                    order by run_after limit ${limit} for update skip locked)
-    returning n.id, n.order_code, n.booking_code, n.pet_code, n.customer_code, n.channel, n.template, n.payload`;
+    returning n.id, n.order_code, n.booking_code, n.pet_code, n.customer_code, n.channel, n.template, n.payload, n.to_customer, n.tries`;
   let sent = 0, failed = 0, skipped = 0;
   for (const j of jobs) {
     try {
       let done: 'sent' | 'skip' = 'sent';
-      if (j.channel === 'line_push') {
+      if (j.channel === 'line_push' && j.template === 'staff_new') {
+        done = await staffPush(j);
+      } else if (j.channel === 'line_push') {
         const m = await lineFor(j);
         if (m === 'skip') done = 'skip';
         else await pushMessage(m.to, [m.card ? { type: 'flex', altText: m.text.slice(0, 380), contents: flexCard(m.card) } : { type: 'text', text: m.text }]);
+      } else if (j.channel === 'email' && j.to_customer) {
+        const m = await customerEmail(j);
+        if (m === 'skip') done = 'skip';
+        else await sendEmail([m.to], m.subject, m.text);
       } else if (j.channel === 'email') {
         const [to] = await sql`select value from settings where key = 'notify_email'`;
         const m = await emailFor(j);
@@ -217,6 +267,14 @@ export async function sendDue(limit = 20, onlyId?: number): Promise<{ sent: numb
       if (done === 'skip') skipped++; else sent++;
     } catch (e) {
       const msg = (e as Error).message.slice(0, 300);
+      // LINE ส่งไม่ได้ (ไม่มี LINE หรือพลาดครบ 5 ครั้ง) → อีเมลสำรองถึงลูกค้าที่กรอกอีเมลไว้
+      if (j.channel === 'line_push' && j.template !== 'staff_new' && !EMAIL_COPY.includes(j.template) && (msg === NO_LINE || j.tries >= 5)) {
+        await sql`insert into notifications (order_code, booking_code, channel, template, payload, to_customer)
+                  values (${j.order_code}, ${j.booking_code}, 'email', ${j.template}, ${sql.json(j.payload as never)}, true)`;
+        await sql`update notifications set status = 'failed', last_error = ${msg + ' · ส่งอีเมลสำรองแทน'} where id = ${j.id}`;
+        failed++;
+        continue;
+      }
       // ลองใหม่ห่างขึ้นเรื่อย ๆ · ครบ 5 ครั้งหยุด
       await sql`update notifications set last_error = ${msg},
                   status = case when tries >= 5 then 'failed' else 'queued' end,

@@ -37,8 +37,9 @@ function needVaccine(b: Business, pets: Pet[], onDate: string) {
   if (bad.length) throw new BookingError('vaccine_required', `${bad.map((p) => p.name).join(', ')} ยังไม่มีวัคซีนที่ผ่านตรวจถึงวันที่ใช้บริการ`);
 }
 
-export function depositOf(b: Business, price: number): number {
+export function depositOf(b: Business, price: number, firstNight = price): number {
   if (b.deposit_type === 'full') return price;
+  if (b.deposit_type === 'first_night') return Math.min(firstNight, price);
   if (b.deposit_type === 'percent') return Math.round((price * Number(b.deposit_value)) / 100);
   return Math.min(Number(b.deposit_value), price);
 }
@@ -191,7 +192,7 @@ export async function quote(customer: string, items: CartItem[]): Promise<Quote>
     const b = await business(it.business);
     if (b.booking_type !== it.kind) throw new BookingError('wrong_type', 'ชนิดการจองไม่ตรงธุรกิจ');
     await withinWindow(b, it);
-    let title = '', when = '', price = 0, start_at = '', end_at = '';
+    let title = '', when = '', price = 0, start_at = '', end_at = '', firstNight = 0;
     const lines: QuoteLine[] = [];
 
     if (it.kind === 'stay') {
@@ -208,6 +209,7 @@ export async function quote(customer: string, items: CartItem[]): Promise<Quote>
         const dow = isoDow(addDays(it.from, i));
         const p = (dow === 5 || dow === 6) && u.weekend_price !== null ? Number(u.weekend_price) : Number(u.price);
         room += p; if (p !== Number(u.price)) wk++;
+        if (i === 0) firstNight = p + (pets.length && u.pet_fee ? Number(u.pet_fee) * pets.length : 0);
       }
       lines.push({ label: `${u.name} × ${nights} คืน`, amount: room, note: wk ? `รวมราคาศุกร์–เสาร์ ${wk} คืน` : undefined });
       if (pets.length && u.pet_fee) {
@@ -255,11 +257,20 @@ export async function quote(customer: string, items: CartItem[]): Promise<Quote>
     }
 
     price = lines.reduce((a, l) => a + l.amount, 0);
-    out.push({ business: b.code, title, when, lines, price, deposit: depositOf(b, price), start_at, end_at });
+    let deposit = depositOf(b, price, firstNight || price), balance = 0, balance_by: string | null = null;
+    if (b.balance_days && deposit < price) {
+      // ยอดคงเหลือต้องจ่ายออนไลน์ก่อนวันใช้บริการ N วัน · จองใกล้กว่านั้นจ่ายเต็มตอนจอง
+      const startD = start_at.slice(0, 10);
+      if (daysBetween(todayTH(), startD) < b.balance_days) deposit = price;
+      else { balance = price - deposit; balance_by = addDays(startD, -b.balance_days); }
+    }
+    out.push({ business: b.code, title, when, lines, price, deposit, balance, balance_by, start_at, end_at });
   }
   const total = out.reduce((a, i) => a + i.price, 0);
   const due_now = out.reduce((a, i) => a + i.deposit, 0);
-  return { items: out, total, due_now, pay_later: total - due_now };
+  const balance = out.reduce((a, i) => a + i.balance, 0);
+  const balance_by = out.map((i) => i.balance_by).filter((x): x is string => !!x).sort()[0] ?? null;
+  return { items: out, total, due_now, balance, balance_by, pay_later: total - due_now - balance };
 }
 
 async function slotFreeFor(staff: string, date: string, time: string, minutes: number) {

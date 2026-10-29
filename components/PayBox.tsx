@@ -8,7 +8,8 @@ import { TopBar } from './ui';
 type Order = OrderView;
 
 const pad = (n: number) => String(n).padStart(2, '0');
-const remain = (o: Order) => Math.round((Number(o.due_now) - Number(o.paid_amount || 0)) * 100) / 100;
+const balanceMode = (o: Order) => o.status === 'paid' && Number(o.balance_due) > 0 && o.last_payment?.status !== 'pending';
+const remain = (o: Order) => balanceMode(o) ? Number(o.balance_due) : Math.round((Number(o.due_now) - Number(o.paid_amount || 0)) * 100) / 100;
 
 export default function PayBox({ order, qr, account, shop }: { order: Order; qr: string; account: string; shop: string }) {
   const router = useRouter();
@@ -61,7 +62,8 @@ export default function PayBox({ order, qr, account, shop }: { order: Order; qr:
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = f.name; a.click();
     setTip('ถ้ารูปไม่ถูกบันทึก ให้กดค้างที่รูป QR แล้วเลือก "บันทึกรูปภาพ"');
   };
-  const expired = order.status === 'expired' || order.late || left === 0;
+  const bal = balanceMode(order);
+  const expired = !bal && (order.status === 'expired' || order.late || left === 0);
   const waiting = order.status === 'pending_review';
   const paid = order.status === 'paid';
 
@@ -69,20 +71,22 @@ export default function PayBox({ order, qr, account, shop }: { order: Order; qr:
     <main className="app">
       <TopBar title="ชำระเงิน" step={order.code} onBack={() => router.push('/me')} />
       <div className="body" style={{ alignItems: 'stretch' }}>
-        {paid && <div className="card on"><span className="ms ok">check</span><span className="t"><b>ยืนยันการจองแล้ว</b><small>ร้านตรวจสลิปเรียบร้อย</small></span></div>}
+        {bal && <div className="warn"><span className="ms">info</span>มัดจำผ่านแล้ว · ชำระยอดคงเหลือภายใน {order.balance_due_by ? thDate(order.balance_due_by) : 'ก่อนวันเข้าพัก'}</div>}
+        {paid && !bal && order.last_payment?.status === 'pending' && <div className="warn"><span className="ms">schedule</span>แนบสลิปยอดคงเหลือแล้ว รอร้านตรวจ</div>}
+        {paid && !bal && <div className="card on"><span className="ms ok">check</span><span className="t"><b>ยืนยันการจองแล้ว</b><small>ร้านตรวจสลิปเรียบร้อย</small></span></div>}
         {waiting && <div className="warn"><span className="ms">schedule</span>แนบสลิปแล้ว รอร้านตรวจ · ผลจะแจ้งในแชท LINE</div>}
         {expired && !waiting && !paid && <div className="err">หมดเวลากันที่แล้ว กรุณาจองใหม่</div>}
         {order.last_payment?.status === 'rejected' && order.status === 'holding' && (
           <div className="err">สลิปก่อนหน้าไม่ผ่าน: {order.last_payment.reason} · แนบสลิปใหม่ได้</div>
         )}
 
-        {order.status === 'holding' && !expired && (
+        {(order.status === 'holding' || bal) && !expired && (
           <>
             <div style={{ textAlign: 'center', display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'center' }}>
               <div className="sub">สแกนจ่าย · {shop}</div>
               <div className="num" style={{ fontSize: 36, fontWeight: 800 }}>{baht(remain(order))}</div>
               {Number(order.paid_amount) > 0 && <div className="sub">ร้านได้รับแล้ว {baht(Number(order.paid_amount))} · โอนเพิ่มอีก {baht(remain(order))}</div>}
-              {left !== null && <div style={{ color: 'var(--red-ink)', fontSize: 14, fontWeight: 700 }}>กันที่ไว้ให้อีก {pad(Math.floor(left / 60))}:{pad(left % 60)} นาที</div>}
+              {left !== null && !bal && <div style={{ color: 'var(--red-ink)', fontSize: 14, fontWeight: 700 }}>กันที่ไว้ให้อีก {pad(Math.floor(left / 60))}:{pad(left % 60)} นาที</div>}
               <div style={{ width: 230, height: 230, border: '2px solid var(--ink)', borderRadius: 16, padding: 10, background: '#fff', display: 'grid', placeItems: 'center' }}>
                 {qr ? <img src={qr} alt={`QR พร้อมเพย์ ${baht(remain(order))}`} style={{ width: '100%', height: '100%' }} />
                     : <span style={{ color: '#9a9a96', fontSize: 14 }}>ร้านยังไม่ได้ตั้งเลขพร้อมเพย์</span>}
@@ -110,7 +114,7 @@ export default function PayBox({ order, qr, account, shop }: { order: Order; qr:
           {order.total > order.due_now && <div className="l"><span>จ่ายที่ร้าน</span><span className="num">{baht(order.total - order.due_now)}</span></div>}
         </div>
       </div>
-      {order.status === 'holding' && !expired && (
+      {(order.status === 'holding' || bal) && !expired && (
         <div className="bottombar"><div className="in">
           <input ref={file} type="file" accept="image/*" hidden onChange={(e) => e.target.files?.[0] && upload(e.target.files[0])} />
           <button className="btn ghost" disabled={!qr} onClick={saveQr}><span className="ms">download</span>บันทึก QR</button>

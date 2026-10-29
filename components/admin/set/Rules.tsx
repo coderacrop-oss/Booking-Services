@@ -12,7 +12,7 @@ type C = { id: number; business_code: string; unit_code: string | null; session_
 export function Hours({ biz, closures, items }: { biz: B[]; closures: C[]; items: { code: string; name: string; business_code: string; kind: 'unit' | 'session' }[] }) {
   const [open, setOpen] = useState<string | null>(null);
   const [f, setF] = useState<B | null>(null);
-  const [n, setN] = useState({ business_code: biz[0]?.code ?? '', item: '', date_from: '', date_to: '', reason: '' });
+  const [n, setN] = useState({ business_code: biz[0]?.code ?? '', item: '', date_from: '', date_to: '', reason: '', notify: false });
   const { save, busy, Msg } = useSave();
   const dayTxt = (d: number[]) => (d.length ? 'ปิด' + d.map((x) => DAYS.find(([k]) => k === x)?.[1]).join(',') : 'ทุกวัน');
   return (
@@ -66,10 +66,11 @@ export function Hours({ biz, closures, items }: { biz: B[]; closures: C[]; items
           <label className="cap" style={{ flex: 1 }}>ถึง<input className="input" type="date" value={n.date_to} onChange={(e) => setN({ ...n, date_to: e.target.value })} /></label>
         </div>
         <input className="input" placeholder="เหตุผล (ลูกค้าเห็น) เช่น ซ่อมแอร์" value={n.reason} onChange={(e) => setN({ ...n, reason: e.target.value })} />
+        <label className="cap" style={{ display: 'flex', gap: 8, alignItems: 'center' }}><input type="checkbox" checked={!!n.notify} onChange={(e) => setN({ ...n, notify: e.target.checked })} />แจ้งลูกค้าที่จองไว้แล้วในช่วงนี้ (ร้านเลื่อนหรือคืนเงินเต็มต่อในหน้าการจอง)</label>
         <button className="btnw dark" disabled={busy || !n.date_from} onClick={async () => {
           const [k, code] = n.item.split(':');
           if (await save('closure.add', { business_code: n.business_code, date_from: n.date_from, date_to: n.date_to || n.date_from, reason: n.reason,
-            unit_code: k === 'unit' ? code : '', session_code: k === 'session' ? code : '' }, 'เพิ่มวันปิดแล้ว')) setN({ ...n, date_from: '', date_to: '', reason: '', item: '' });
+            unit_code: k === 'unit' ? code : '', session_code: k === 'session' ? code : '', notify: !!n.notify }, 'เพิ่มวันปิดแล้ว · แจ้งลูกค้าที่จองไว้แล้ว (ถ้ามี)')) setN({ ...n, date_from: '', date_to: '', reason: '', item: '', notify: false });
         }}>เพิ่ม</button>
       </div>
     </>

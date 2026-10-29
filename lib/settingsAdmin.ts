@@ -1,5 +1,6 @@
 import 'server-only';
 import { sql } from './db';
+import { enqueue } from './notify';
 import { BookingError } from './booking';
 import { canSee, type StaffUser } from './staff';
 
@@ -130,9 +131,20 @@ export async function applySetting(s: StaffUser, kind: string, d: D) {
       const from = str(d.date_from, 10), to = str(d.date_to, 10) || from;
       if (!DATE.test(from) || !DATE.test(to) || to < from) throw new BookingError('bad', 'เลือกวันที่ให้ถูกต้อง');
       const unit = str(d.unit_code, 40) || null, sess = str(d.session_code, 40) || null;
-      await sql`insert into closures (business_code, unit_code, session_code, date_from, date_to, reason)
-                values (${biz}, ${unit}, ${sess}, ${from}, ${to}, ${str(d.reason, 80) || null})`;
-      return {};
+      const reason = str(d.reason, 80) || null;
+      // การจองที่โดนวันปิด: ต้องยืนยันก่อน แล้วระบบแจ้งลูกค้าทุกคน (ร้านเลื่อน/คืนเงินเต็มต่อในหน้าการจอง)
+      const hit = await sql`
+        select distinct k.order_code from bookings k
+        where k.business_code = ${biz} and booking_active(k.status)
+          and (${unit}::text is null or k.unit_code = ${unit}) and (${sess}::text is null or k.session_code = ${sess})
+          and tstzrange(k.start_at, k.end_at, '[)') && tstzrange((${from}::date)::timestamp at time zone 'Asia/Bangkok', ((${to}::date) + 1)::timestamp at time zone 'Asia/Bangkok', '[)')`;
+      if (hit.length && d.notify !== true) throw new BookingError('has_bookings', `มีลูกค้าจองไว้แล้ว ${hit.length} การจองในช่วงนี้ · ติ๊ก "แจ้งลูกค้าที่จองไว้" แล้วกดเพิ่มอีกครั้ง`);
+      await sql.begin(async (tx) => {
+        await tx`insert into closures (business_code, unit_code, session_code, date_from, date_to, reason)
+                  values (${biz}, ${unit}, ${sess}, ${from}, ${to}, ${reason})`;
+        for (const h of hit) await enqueue(tx, { order: h.order_code, channel: 'line_push', template: 'closed_day', payload: { reason } });
+      });
+      return { affected: hit.length };
     }
     case 'calendar.save': {
       // รหัสปฏิทิน Google ของแต่ละธุรกิจ (ไม่ใช่ค่าลับ · แชร์ปฏิทินให้อีเมล service account ก่อน)

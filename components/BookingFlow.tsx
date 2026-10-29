@@ -46,8 +46,8 @@ function useFetch<T>(url: string | null, body?: unknown): Avail<T> {
   return st;
 }
 
-export default function BookingFlow({ cat, pets, loggedIn, today, initial }:
-  { cat: BizCatalog; pets: Pet[]; loggedIn: boolean; today: string; initial?: { date?: string; service?: string } }) {
+export default function BookingFlow({ cat, pets, loggedIn, today, initial, credit = 0 }:
+  { cat: BizCatalog; pets: Pet[]; loggedIn: boolean; today: string; initial?: { date?: string; service?: string }; credit?: number }) {
   const router = useRouter();
   const b = cat.business;
   const forPeople = cat.units.some((u) => u.max_people);              // Villa = ที่พักคน
@@ -82,6 +82,7 @@ export default function BookingFlow({ cat, pets, loggedIn, today, initial }:
   const toastT = useRef<ReturnType<typeof setTimeout>>(undefined);
   const flash = (m: string) => { setToast(m); clearTimeout(toastT.current); toastT.current = setTimeout(() => setToast(''), 2400); };
   const [accept, setAccept] = useState(false);
+  const [useCredit, setUseCredit] = useState(credit > 0);
   const [busy, setBusy] = useState(false);
   const [orderErr, setOrderErr] = useState('');
   const [trip, setTrip] = useState<TripEntry[]>([]);
@@ -249,7 +250,7 @@ export default function BookingFlow({ cat, pets, loggedIn, today, initial }:
   const placeOrder = async () => {
     if (!cart) return;
     setBusy(true); setOrderErr('');
-    const r = await fetch('/api/orders', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ items: allItems, accept }) });
+    const r = await fetch('/api/orders', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ items: allItems, accept, use_credit: useCredit && credit > 0 }) });
     const j = await r.json().catch(() => ({}));
     setBusy(false);
     if (!r.ok) { setOrderErr(j.message || 'จองไม่สำเร็จ'); return; }
@@ -453,7 +454,9 @@ export default function BookingFlow({ cat, pets, loggedIn, today, initial }:
           {q.data.items.flatMap((it) => it.lines).map((l, k) => <div key={k} className="l"><span>{l.label}{l.note ? ` (${l.note})` : ''}</span><span className="num">{baht(l.amount)}</span></div>)}
           <hr />
           <div className="l tot"><span>รวม</span><span className="num">{baht(q.data.total)}</span></div>
-          <div className="l"><span>จ่ายตอนจอง</span><span className="num">{baht(q.data.due_now)}</span></div>
+          {useCredit && credit > 0 && <div className="l"><span>ใช้เครดิต</span><span className="num">−{baht(Math.min(credit, q.data.due_now))}</span></div>}
+          <div className="l"><span>จ่ายตอนจอง</span><span className="num">{baht(q.data.due_now - (useCredit ? Math.min(credit, q.data.due_now) : 0))}</span></div>
+          {q.data.balance > 0 && <div className="l"><span>ยอดคงเหลือ · ชำระก่อน {q.data.balance_by ? thDate(q.data.balance_by) : '-'}</span><span className="num">{baht(q.data.balance)}</span></div>}
           {q.data.pay_later > 0 && <div className="l"><span>จ่ายที่ร้าน</span><span className="num">{baht(q.data.pay_later)}</span></div>}
         </div>
       )}
@@ -486,6 +489,11 @@ export default function BookingFlow({ cat, pets, loggedIn, today, initial }:
           })}
         </>
       )}
+      {credit > 0 && q.data && (
+        <button className={'card' + (useCredit ? ' on' : '')} onClick={() => setUseCredit(!useCredit)}>
+          <span className="t"><b style={{ fontSize: 15 }}>ใช้เครดิต {baht(Math.min(credit, q.data.due_now))}</b><small>เครดิตคงเหลือ {baht(credit)}</small></span><Tick on={useCredit} />
+        </button>
+      )}
       <div className="section">เงื่อนไขการจองและยกเลิก</div>
       <div className="sub" style={{ fontSize: 13 }}>{b.cancel_policy}</div>
       <div className="sub" style={{ fontSize: 13 }}>หลังกดชำระเงิน ร้านกันที่ไว้ {cat.hold_minutes} นาที แนบสลิปไม่ทันระบบจะปล่อยที่ให้คนอื่น</div>
@@ -507,7 +515,7 @@ export default function BookingFlow({ cat, pets, loggedIn, today, initial }:
       </div>
       <BottomBar
         note={last ? 'จ่ายวันนี้' : note}
-        amount={last ? (q.data ? baht(q.data.due_now) : '—') : estimate === null ? '—' : baht(estimate)}
+        amount={last ? (q.data ? baht(q.data.due_now - (useCredit ? Math.min(credit, q.data.due_now) : 0)) : '—') : estimate === null ? '—' : baht(estimate)}
         label={last ? 'ชำระเงิน' : step === 'addons' && !addons.length ? 'ข้าม' : 'ต่อไป'}
         red={last}
         disabled={!valid[step]}
