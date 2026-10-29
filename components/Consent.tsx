@@ -13,8 +13,12 @@ export default function Consent({ shop }: { shop: string }) {
     setBusy(true); setErr('');
     const r = await fetch('/api/me/consent', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ accept: true, phone }) });
     setBusy(false);
-    if (!r.ok) return setErr((await r.json()).message);
-    router.refresh();
+    if (!r.ok) {
+      const j = await r.json().catch(() => null);
+      return setErr(j?.message || `บันทึกไม่สำเร็จ (${r.status}) ลองใหม่อีกครั้ง`);
+    }
+    // โหลดหน้าใหม่ทั้งหน้า (refresh อย่างเดียวบางเครื่องใน LINE ไม่เปลี่ยนหน้า)
+    location.reload();
   };
   return (
     <main className="app">
