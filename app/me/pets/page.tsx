@@ -1,24 +1,43 @@
+import Link from 'next/link';
 import { sql } from '@/lib/db';
-import { me } from '@/lib/me';
 import { todayTH } from '@/lib/thaidate';
-import LiffGate from '@/components/LiffGate';
-import Consent from '@/components/Consent';
-import PetsManager from '@/components/PetsManager';
-import { getSetting } from '@/lib/catalog';
+import { CustScreen, requireCustomer } from '@/components/cust/Gate';
+import { Photo } from '@/components/ui';
+import { vaxState } from '@/lib/vax';
 
 export const dynamic = 'force-dynamic';
 
-// น้องของฉัน: เพิ่มน้อง · ส่งรูปวัคซีน · ดูผลตรวจ
+// น้องของฉัน
 export default async function MyPets({ searchParams }: { searchParams: Promise<{ back?: string }> }) {
-  const m = await me();
-  if (!m.code) return <LiffGate loggedIn={false}><main className="app"><div className="body"><div className="warn">เปิดหน้านี้ผ่าน LINE ของร้าน</div></div></main></LiffGate>;
-  if (!m.consented) return <Consent shop={await getSetting('shop_name', 'ร้าน')} />;
+  const g = await requireCustomer();
+  if ('node' in g) return g.node;
   const { back } = await searchParams;
+  const today = todayTH();
   const pets = await sql`
-    select p.code, p.name, p.species, p.breed, p.weight_kg, p.note,
-      coalesce((select json_agg(json_build_object('id', v.id, 'vaccine', v.vaccine, 'expires_on', to_char(v.expires_on, 'YYYY-MM-DD'),
-                                                  'status', v.status, 'reason', v.reject_reason) order by v.created_at desc)
+    select p.code, p.name, p.breed, p.weight_kg, p.species,
+      coalesce((select json_agg(json_build_object('status', v.status, 'expires_on', to_char(v.expires_on, 'YYYY-MM-DD')))
                 from pet_vaccines v where v.pet_code = p.code), '[]') as vaccines
-    from pets p where p.customer_code = ${m.code} order by p.created_at, p.code`;
-  return <PetsManager pets={[...pets] as never} today={todayTH()} back={back && back.startsWith('/b/') ? back : null} />;
+    from pets p where p.customer_code = ${g.code} order by p.created_at, p.code`;
+  const q = back && back.startsWith('/b/') ? `?back=${encodeURIComponent(back)}` : '';
+  return (
+    <CustScreen>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div className="title">น้องของฉัน</div>
+        <Link href={`/me/pets/new${q}`} className="pbtn" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><span className="ms" style={{ fontSize: 20 }}>add</span>เพิ่มน้อง</Link>
+      </div>
+      {back && <Link href={back} className="note y">กลับไปจองต่อ ›</Link>}
+      {!pets.length && <div className="note" style={{ textAlign: 'center' }}>ยังไม่มีน้องในบัญชี · กด &quot;เพิ่มน้อง&quot;</div>}
+      {pets.map((p) => {
+        const v = vaxState(p.vaccines, today);
+        return (
+          <Link key={p.code} href={`/me/pets/${p.code}${q}`} className="card" style={{ padding: 16 }}>
+            <Photo h={64} label="" />
+            <span className="t"><b>{p.name}</b><small>{[p.breed, `${p.weight_kg} กก.`].filter(Boolean).join(' · ')}</small>
+              <span className="pill" style={{ background: v[1], color: v[2], alignSelf: 'flex-start' }}>{v[0]}</span></span>
+            <span className="ms" style={{ color: 'var(--ink-3)' }}>chevron_right</span>
+          </Link>
+        );
+      })}
+    </CustScreen>
+  );
 }

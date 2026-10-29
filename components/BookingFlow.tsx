@@ -385,7 +385,7 @@ export default function BookingFlow({ cat, pets, loggedIn, today, initial }:
   const last = step === 'summary';
   return (
     <main className="app">
-      <TopBar title={`จอง ${b.name}`} step={`ขั้น ${i + 1}/${steps.length}`} onBack={() => go(-1)} />
+      <TopBar title={b.booking_type === 'stay' && !forPeople ? b.tagline : `จอง ${b.name}`} step={`ขั้น ${i + 1}/${steps.length}`} onBack={() => go(-1)} />
       <Progress n={steps.length} at={i} />
       <div className="body">
         {trip.length > 0 && step !== 'summary' && <div className="warn"><span className="ms">info</span>ทริปนี้มี {trip.length} รายการก่อนหน้า · จ่ายรวม QR เดียวตอนสรุป</div>}

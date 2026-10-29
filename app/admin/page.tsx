@@ -1,88 +1,76 @@
+import Link from 'next/link';
 import { sql } from '@/lib/db';
-import { canSee, currentStaff } from '@/lib/staff';
-import { addDays, baht, thDate, todayTH } from '@/lib/thaidate';
+import { currentStaff } from '@/lib/staff';
+import { dayRows, nextAction, pendingCounts } from '@/lib/admin';
+import { thDate, todayTH } from '@/lib/thaidate';
 import { bizLook } from '@/lib/look';
-import BookingActions from '@/components/BookingActions';
+import Head from '@/components/admin/Head';
+import ActBtn from '@/components/admin/ActBtn';
 
 export const dynamic = 'force-dynamic';
 
-const ST: Record<string, [string, string, string]> = {
-  holding: ['รอโอน', '#FDF5DC', '#8A5A00'], confirmed: ['ยืนยันแล้ว', '#E4F3EA', '#1E7B4A'],
-  checked_in: ['เข้าพักแล้ว', '#E4F3EA', '#1E7B4A'], in_progress: ['กำลังทำ', '#E3EEFB', '#1F5FA8'],
-  done: ['เสร็จแล้ว', '#F4F4F1', '#555'], cancelled: ['ยกเลิก', '#FBE3E4', '#B8262E'],
-  no_show: ['ไม่มา', '#FBE3E4', '#B8262E'], expired: ['หมดเวลา', '#F4F4F1', '#9A9A96'],
-};
-
-// หลังบ้าน · วันนี้ (อ่านอย่างเดียวในเวอร์ชันนี้)
-export default async function AdminToday({ searchParams }: { searchParams: Promise<{ date?: string }> }) {
-  const staff = await currentStaff();
-  if (!staff) return null;
+// หลังบ้าน · วันนี้: งานถัดไป · รอคุณจัดการ · ต่อจากนี้
+export default async function Today({ searchParams }: { searchParams: Promise<{ date?: string }> }) {
+  const s = await currentStaff();
+  if (!s) return null;
   const sp = await searchParams;
-  const date = /^\d{4}-\d{2}-\d{2}$/.test(sp.date || '') ? sp.date! : todayTH();
-
-  const [rows, slips, vax, biz] = await Promise.all([
-    sql`select k.code, k.business_code, k.kind, k.status, k.price, k.guests,
-               to_char(k.start_at at time zone 'Asia/Bangkok', 'YYYY-MM-DD HH24:MI') as s,
-               to_char(k.end_at at time zone 'Asia/Bangkok', 'YYYY-MM-DD HH24:MI') as e,
-               coalesce(u.name, '') as unit, coalesce(sv.name, '') as service, coalesce(st.display_name, '') as staff,
-               c.display_name as customer, o.status as order_status,
-               coalesce((select string_agg(p.name, ', ') from booking_pets bp join pets p on p.code = bp.pet_code where bp.booking_code = k.code), '') as pets
-        from bookings k join orders o on o.code = k.order_code join customers c on c.code = o.customer_code
-        left join units u on u.code = k.unit_code left join services sv on sv.code = k.service_code left join staff st on st.code = k.staff_code
-        where k.status not in ('cancelled', 'expired')
-          and (k.start_at at time zone 'Asia/Bangkok')::date <= ${date}::date
-          and (k.end_at at time zone 'Asia/Bangkok')::date >= ${date}::date
-        order by k.business_code, k.start_at`,
-    sql`select count(*)::int as n from payments where status = 'pending'`,
-    sql`select count(*)::int as n from pet_vaccines where status = 'pending'`,
-    sql`select code, name, color, booking_type from businesses where active order by sort`,
-  ]);
+  const today = todayTH();
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(sp.date || '') ? sp.date! : today;
+  const [rows, cnt, [shop]] = await Promise.all([dayRows(s, date), pendingCounts(s), sql`select value from settings where key = 'shop_name'`]);
+  const nowHM = date === today ? new Date(Date.now() + 7 * 3600000).toISOString().slice(11, 16) : '00:00';
+  // ต่อจากนี้: งานที่ยังต้องทำวันนี้ เรียงตามเวลา
+  const todo = rows.filter((r) => r.phase !== 'during' && !['done', 'no_show'].includes(r.status) && !(r.kind === 'stay' && r.phase === 'start' && r.status === 'checked_in'))
+    .sort((a, b) => a.time.localeCompare(b.time));
+  const nxt = todo.find((r) => nextAction(r) && r.time >= nowHM.slice(0, 2) + ':00') ?? todo.find((r) => nextAction(r));
+  const checkins = rows.filter((r) => r.kind === 'stay' && r.phase === 'start');
+  const ciBiz = [...new Set(checkins.map((r) => r.biz))].join(' + ');
+  const look = (r: { business_code: string; color: string | null; booking_type: string }) => bizLook(r.business_code, r.color, r.booking_type);
 
   return (
-    <main className="admin">
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-        <div className="h1" style={{ flex: 1 }}>{date === todayTH() ? 'วันนี้' : 'การจอง'} · {thDate(date)}</div>
-        <a className="btn ghost" href={`?date=${addDays(date, -1)}`}>‹</a>
-        <a className="btn ghost" href="?">วันนี้</a>
-        <a className="btn ghost" href={`?date=${addDays(date, 1)}`}>›</a>
+    <>
+      <Head cap={`${thDate(date)} · ${shop?.value ?? ''}`} title={date === today ? 'วันนี้' : thDate(date)} />
+      {nxt && (() => { const L = look(nxt); const a = nextAction(nxt)!; return (
+        <Link href={`/admin/b/${nxt.order_code}`} className="next">
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span className="biztag" style={{ background: L.bg, color: L.fg, boxShadow: L.shadow }}><span className="ms">{L.icon}</span>{nxt.biz}</span>
+            <span style={{ fontSize: 13, opacity: .8 }}>งานถัดไป · {nxt.customer}</span>
+          </div>
+          <div className="t">{nxt.time} · {nxt.title}</div>
+          <ActBtn code={nxt.code} action={a[0]} label={a[1]} big />
+        </Link>); })()}
+
+      <div className="grp">รอคุณจัดการ</div>
+      <div className="list">
+        <Link href="/admin/slips" className={'li' + (cnt.slips ? ' hot' : '')}>
+          <span className="ms">receipt_long</span>
+          <span className="t"><b>สลิปรอตรวจ</b><small>{cnt.flagged ? `มี ${cnt.flagged} ใบยอดไม่ตรง` : cnt.slips ? 'รอตรวจ' : 'ไม่มีค้าง'}</small></span>
+          <span className="n num" style={{ color: cnt.slips ? undefined : 'var(--ink-3)' }}>{cnt.slips}</span><span className="ms go">chevron_right</span>
+        </Link>
+        <Link href="/admin/vaccines" className="li">
+          <span className="ms">vaccines</span>
+          <span className="t"><b>วัคซีนรอตรวจ</b><small>{cnt.vaccines ? 'รอตรวจ' : 'ไม่มีค้าง'}</small></span>
+          <span className="n num" style={{ color: cnt.vaccines ? undefined : 'var(--ink-3)' }}>{cnt.vaccines}</span><span className="ms go">chevron_right</span>
+        </Link>
+        <Link href="/admin/cal" className="li">
+          <span className="ms">login</span>
+          <span className="t"><b>เช็กอินวันนี้</b><small>{ciBiz || 'ไม่มี'}</small></span>
+          <span className="n num">{checkins.length}</span><span className="ms go">chevron_right</span>
+        </Link>
       </div>
-      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-        <a href="/admin/slips" className="pill" style={{ background: '#FDF5DC', color: '#8A5A00' }}>สลิปรอตรวจ {slips[0].n} ›</a>
-        <span className="pill" style={{ background: '#FDF5DC', color: '#8A5A00' }}>วัคซีนรอตรวจ {vax[0].n}</span>
+
+      <div className="grp">ต่อจากนี้<span>{todo.length} รายการ</span></div>
+      {!todo.length && <div className="note">ไม่มีงานค้างวันนี้</div>}
+      <div>
+        {todo.map((r) => { const L = look(r); const a = nextAction(r); return (
+          <Link key={r.code + r.phase} href={`/admin/b/${r.order_code}`} className="row">
+            <span className="tm num">{r.time}</span>
+            <span className="t">
+              <span className="biztag" style={{ background: L.bg, color: L.fg, boxShadow: L.shadow }}><span className="ms">{L.icon}</span>{r.biz}</span>
+              <b>{r.title}</b><small>{r.customer}{r.staff ? ` · พี่${r.staff}` : ''}{r.order_status !== 'paid' ? ' · รอสลิป' : ''}</small>
+            </span>
+            {a ? <ActBtn code={r.code} action={a[0]} label={a[1]} /> : <span className="cap">{r.status === 'in_progress' ? 'กำลังทำ' : r.status === 'checked_in' ? 'เข้าพักแล้ว' : ''}</span>}
+          </Link>); })}
       </div>
-      {biz.filter((b) => canSee(staff, b.code)).map((b) => {
-        const list = rows.filter((r) => r.business_code === b.code);
-        const L = bizLook(b.code, b.color, b.booking_type);
-        return (
-          <section key={b.code} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span className="tag" style={{ background: L.bg, color: L.fg }}><span className="ms" style={{ fontSize: 16 }}>{L.icon}</span>{b.name}</span>
-              <span className="sub">{list.length} รายการ</span>
-            </div>
-            {list.length > 0 && (
-              <table>
-                <thead><tr><th>รหัส</th><th>เวลา</th><th>รายการ</th><th>ลูกค้า · น้อง</th><th>ราคา</th><th>สถานะ</th><th></th></tr></thead>
-                <tbody>
-                  {list.map((r) => {
-                    const s = ST[r.status] ?? [r.status, '#eee', '#111'];
-                    const span = r.s.slice(0, 10) === r.e.slice(0, 10) ? `${r.s.slice(11)}–${r.e.slice(11)}` : `${thDate(r.s.slice(0, 10), false)} ${r.s.slice(11)} → ${thDate(r.e.slice(0, 10), false)} ${r.e.slice(11)}`;
-                    return (
-                      <tr key={r.code}>
-                        <td className="num">{r.code}</td><td className="num">{span}</td>
-                        <td>{[r.unit, r.service, r.staff && 'พี่' + r.staff, r.guests && `${r.guests} คน`].filter(Boolean).join(' · ')}</td>
-                        <td>{r.customer}{r.pets ? ' · ' + r.pets : ''}</td>
-                        <td className="num">{baht(r.price)}</td>
-                        <td><span className="pill" style={{ background: s[1], color: s[2] }}>{s[0]}</span>{r.order_status === 'pending_review' && <span className="pill" style={{ background: '#FDF5DC', color: '#8A5A00', marginLeft: 4 }}>สลิปรอตรวจ</span>}</td>
-                        <td><BookingActions code={r.code} kind={r.kind} status={r.status} paid={r.order_status === 'paid'} /></td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            )}
-          </section>
-        );
-      })}
-    </main>
+    </>
   );
 }

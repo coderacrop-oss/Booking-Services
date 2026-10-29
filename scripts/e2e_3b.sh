@@ -41,8 +41,8 @@ check 'ยังไม่มีวัคซีน จองสระไม่ไ
 check 'ส่งวัคซีน' "$(curl -s -XPOST $B/api/me/pets/$PET/vaccine -F vaccine='รวม 5 โรค' -F expires_on=2027-10-01 -F "file=@$TMP/img.png")" '"ok":true'
 check 'ส่งวัคซีนให้น้องคนอื่นไม่ได้' "$(curl -s -XPOST $B/api/me/pets/P001/vaccine -F vaccine=x -F expires_on=2027-10-01 -F "file=@$TMP/img.png")" 'not_found'
 check 'รอตรวจยังจองไม่ได้' "$(post /api/quote "{\"items\":[{\"business\":\"pool\",\"kind\":\"session\",\"session\":\"S1000\",\"date\":\"2026-11-28\",\"pets\":[\"$PET\"]}]}")" 'vaccine_required'
-VID=$(curl -s $B/admin/vaccines | sed 's/<!-- -->//g' | grep -o 'วัคซีนรอตรวจ · [0-9]*' | head -1)
-check 'หลังบ้านเห็นวัคซีนรอตรวจ' "$VID" 'วัคซีนรอตรวจ · [1-9]'
+VID=$(curl -s $B/admin/vaccines | sed 's/<!-- -->//g' | grep -o '[0-9]* รายการ' | head -1)
+check 'หลังบ้านเห็นวัคซีนรอตรวจ' "$VID" '^[1-9][0-9]* รายการ'
 VAX=$(psql "${DB_URL:-postgresql://postgres@127.0.0.1:54329/t2}" -tAc "select id from pet_vaccines where pet_code='$PET'" 2>/dev/null)
 if [ -n "$VAX" ]; then
   check 'ร้านกดวัคซีนผ่าน' "$(post /api/admin/vaccines/$VAX '{"action":"approve","expires_on":"2027-09-30"}')" '"ok":true'

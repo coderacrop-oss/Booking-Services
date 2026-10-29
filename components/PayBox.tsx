@@ -33,6 +33,16 @@ export default function PayBox({ order, qr, account, shop }: { order: Order; qr:
     router.refresh();
   };
 
+  // บันทึก QR เป็นรูป PNG (ไว้เปิดสแกนในแอปธนาคาร)
+  const saveQr = () => {
+    const img = new Image();
+    img.onload = () => {
+      const c = document.createElement('canvas'); c.width = 720; c.height = 720;
+      const g = c.getContext('2d')!; g.fillStyle = '#fff'; g.fillRect(0, 0, 720, 720); g.drawImage(img, 40, 40, 640, 640);
+      const a = document.createElement('a'); a.href = c.toDataURL('image/png'); a.download = `QR-${order.code}.png`; a.click();
+    };
+    img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(qr);
+  };
   const expired = order.status === 'expired' || order.late || left === 0;
   const waiting = order.status === 'pending_review';
   const paid = order.status === 'paid';
@@ -81,6 +91,7 @@ export default function PayBox({ order, qr, account, shop }: { order: Order; qr:
       {order.status === 'holding' && !expired && (
         <div className="bottombar"><div className="in">
           <input ref={file} type="file" accept="image/*" hidden onChange={(e) => e.target.files?.[0] && upload(e.target.files[0])} />
+          {qr && <button className="btn ghost" onClick={saveQr}><span className="ms">download</span>บันทึก QR</button>}
           <button className="btn red" style={{ flex: 1 }} disabled={busy} onClick={() => file.current?.click()}>
             <span className="ms">upload</span>{busy ? 'กำลังส่ง…' : 'แนบสลิป'}
           </button>

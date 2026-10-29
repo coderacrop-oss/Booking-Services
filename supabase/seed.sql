@@ -1,4 +1,4 @@
--- สร้างจาก data/BaanMax-booking-schema.xlsx · 2026-10-29 18:47 · ห้ามแก้ไฟล์นี้ตรง ๆ ให้แก้ Excel แล้วรันสคริปต์ใหม่
+-- สร้างจาก data/BaanMax-booking-schema.xlsx · 2026-10-29 19:54 · ห้ามแก้ไฟล์นี้ตรง ๆ ให้แก้ Excel แล้วรันสคริปต์ใหม่
 begin;
 insert into settings (key, value, note) values ('shop_name', 'เพื่อนหมา PET LOVER', 'ชื่อที่ขึ้นในหน้าจองและการ์ด LINE');
 insert into settings (key, value, note) values ('legal_name', 'บริษัท พันธุ์พฤทธิ์ จำกัด', 'ชื่อในใบเสร็จ (ทุกธุรกิจใช้นามเดียวกัน)');
@@ -9,10 +9,10 @@ insert into settings (key, value, note) values ('remind_hours_before', '24', '�
 insert into settings (key, value, note) values ('notify_email', 'shop@example.com', 'อีเมลกลางรับแจ้งจองใหม่ / สลิปรอตรวจ');
 insert into settings (key, value, note) values ('timezone', 'Asia/Bangkok', 'เขตเวลา');
 insert into settings (key, value, note) values ('policy_version', '2026-11-01', 'เปลี่ยนเมื่อแก้นโยบาย ลูกค้าต้องกดยอมรับใหม่');
-insert into businesses (code, name, tagline, booking_type, color, id_prefix, deposit_type, checkin_time, checkout_time, cancel_policy, need_vaccine, sort, active) values ('pet_hotel', 'Pet hotel', 'ฝากน้องค้างคืน', 'stay', '#F2C94C', 'H', 'full', '14:00-18:00', '12:00', 'ยกเลิกก่อน 3 วัน คืนเป็นเครดิต · น้อยกว่า 3 วันไม่คืน', true, 1, true);
-insert into businesses (code, name, tagline, booking_type, color, id_prefix, deposit_type, deposit_value, checkin_time, checkout_time, cancel_policy, need_vaccine, sort, active) values ('villa', 'Villa', 'ที่พักสำหรับคน', 'stay', '#111111', 'V', 'percent', 50, '14:00', '12:00', 'ยกเลิกก่อน 14 วัน คืนเครดิตเต็ม · 7–13 วัน เครดิต 50% · น้อยกว่า 7 วันไม่คืน', false, 2, true);
-insert into businesses (code, name, tagline, booking_type, color, id_prefix, deposit_type, cancel_policy, need_vaccine, sort, active) values ('pool', 'สระ', 'จองรอบว่ายน้ำ (น้องหมา)', 'session', '#8EC9EE', 'P', 'full', 'ยกเลิกก่อน 2 ชม. คืนสิทธิ์ · หลังจากนั้นไม่คืน', true, 3, true);
-insert into businesses (code, name, tagline, booking_type, color, id_prefix, deposit_type, deposit_value, cancel_policy, need_vaccine, sort, active) values ('grooming', 'Grooming', 'อาบน้ำ ตัดขน', 'slot', '#E8474C', 'G', 'fixed', 200, 'ยกเลิก/เลื่อนก่อน 24 ชม. ฟรี · น้อยกว่า 24 ชม. ไม่คืนมัดจำ', false, 4, true);
+insert into businesses (code, name, tagline, booking_type, color, id_prefix, deposit_type, checkin_time, checkout_time, cancel_policy, need_vaccine, sort, active, open_hours, closed_weekdays, cancel_rules) values ('pet_hotel', 'Pet hotel', 'ฝากน้องค้างคืน', 'stay', '#FDF5DC', 'H', 'full', '14:00-18:00', '12:00', 'ยกเลิกก่อน 3 วัน คืนเป็นเครดิต · น้อยกว่า 3 วันไม่คืน', true, 1, true, '14:00-18:00', '{}', '[{"days": 3, "refund": 100}]'::jsonb);
+insert into businesses (code, name, tagline, booking_type, color, id_prefix, deposit_type, deposit_value, checkin_time, checkout_time, cancel_policy, need_vaccine, sort, active, open_hours, closed_weekdays, cancel_rules) values ('villa', 'Villa', 'ที่พักสำหรับคน', 'stay', '#111111', 'V', 'percent', 50, '14:00', '12:00', 'ยกเลิกก่อน 14 วัน คืนเครดิตเต็ม · 7–13 วัน เครดิต 50% · น้อยกว่า 7 วันไม่คืน', false, 2, true, 'เข้า 14:00 · ออก 12:00', '{}', '[{"days": 14, "refund": 100}, {"days": 7, "refund": 50}]'::jsonb);
+insert into businesses (code, name, tagline, booking_type, color, id_prefix, deposit_type, cancel_policy, need_vaccine, sort, active, open_hours, closed_weekdays, cancel_rules) values ('pool', 'สระ', 'จองรอบว่ายน้ำ', 'session', '#8FC9F0', 'P', 'full', 'ยกเลิกก่อน 2 ชม. คืนสิทธิ์ · หลังจากนั้นไม่คืน', true, 3, true, '09:00-18:00', '{}', '[{"days": 1, "refund": 100}]'::jsonb);
+insert into businesses (code, name, tagline, booking_type, color, id_prefix, deposit_type, deposit_value, cancel_policy, need_vaccine, sort, active, open_hours, closed_weekdays, cancel_rules) values ('grooming', 'Grooming', 'อาบน้ำ ตัดขน', 'slot', '#E8444C', 'G', 'fixed', 200, 'ยกเลิก/เลื่อนก่อน 24 ชม. ฟรี · น้อยกว่า 24 ชม. ไม่คืนมัดจำ', false, 4, true, '09:00-18:00', array[1]::smallint[], '[{"days": 1, "refund": 100}]'::jsonb);
 insert into units (code, business_code, name, summary, price, max_pets, max_pet_kg, amenities, sort, active) values ('COZY1', 'pet_hotel', 'Cozy 1', '6 ตร.ม. · รับ 1 ตัว', 650, 1, 10, array['แอร์','กล้องดูน้อง']::text[], 1, true);
 insert into units (code, business_code, name, summary, price, max_pets, max_pet_kg, amenities, sort, active) values ('COZY2', 'pet_hotel', 'Cozy 2', '6 ตร.ม. · รับ 1 ตัว', 650, 1, 10, array['แอร์','กล้องดูน้อง']::text[], 2, true);
 insert into units (code, business_code, name, summary, price, max_pets, amenities, sort, active) values ('GARDEN1', 'pet_hotel', 'Garden 1', 'ติดสนาม · รับ 2 ตัว', 950, 2, array['แอร์','สนามส่วนตัว']::text[], 3, true);
@@ -78,14 +78,14 @@ insert into customers (code, line_user_id, display_name, phone, email, pdpa_at, 
 insert into customers (code, line_user_id, display_name, phone, pdpa_at, policy_version) values ('C005', 'Utest0005', 'จ๋า', '0800000005', '2026-11-06 08:30+07', '2026-11-01');
 insert into customers (code, line_user_id, display_name, phone, pdpa_at, policy_version) values ('C006', 'Utest0006', 'แพรว', '0800000006', '2026-11-10 13:00+07', '2026-11-01');
 insert into customers (code, line_user_id, display_name, phone, pdpa_at, policy_version) values ('C007', 'Utest0007', 'บีม', '0800000007', '2026-11-12 18:00+07', '2026-11-01');
-insert into pets (code, customer_code, name, species, breed, weight_kg) values ('P001', 'C001', 'โมจิ', 'dog', 'ปอม', 3.2);
-insert into pets (code, customer_code, name, species, breed, weight_kg, note) values ('P002', 'C001', 'ข้าวตู', 'dog', 'ชิสุ', 6.5, 'กลัวเสียงไดร์');
-insert into pets (code, customer_code, name, species, breed, weight_kg) values ('P003', 'C002', 'พุดดิ้ง', 'dog', 'ชิบะ', 9);
-insert into pets (code, customer_code, name, species, breed, weight_kg) values ('P004', 'C002', 'นมสด', 'dog', 'ชิบะ', 8.5);
-insert into pets (code, customer_code, name, species, breed, weight_kg) values ('P005', 'C003', 'ลาเต้', 'dog', 'พุดเดิ้ล', 4.8);
-insert into pets (code, customer_code, name, species, breed, weight_kg) values ('P006', 'C005', 'ปุยฝ้าย', 'dog', 'ปอม', 2.9);
-insert into pets (code, customer_code, name, species, breed, weight_kg) values ('P007', 'C007', 'ขนมปัง', 'dog', 'บีเกิ้ล', 10.2);
-insert into pets (code, customer_code, name, species, breed, weight_kg) values ('P008', 'C006', 'ถั่วแดง', 'dog', 'พันธุ์ผสม', 7);
+insert into pets (code, customer_code, name, species, breed, weight_kg, tags) values ('P001', 'C001', 'โมจิ', 'dog', 'ปอม', 3.2, array['กลัวเสียงไดร์']::text[]);
+insert into pets (code, customer_code, name, species, breed, weight_kg, tags) values ('P002', 'C001', 'ข้าวตู', 'dog', 'ชิสุ', 6.5, array['แพ้ไก่']::text[]);
+insert into pets (code, customer_code, name, species, breed, weight_kg, tags) values ('P003', 'C002', 'พุดดิ้ง', 'dog', 'ชิบะ', 9, array['กลัวเสียงไดร์']::text[]);
+insert into pets (code, customer_code, name, species, breed, weight_kg, tags) values ('P004', 'C002', 'นมสด', 'dog', 'ชิบะ', 8.5, '{}');
+insert into pets (code, customer_code, name, species, breed, weight_kg, tags) values ('P005', 'C003', 'ลาเต้', 'dog', 'พุดเดิ้ล', 4.8, '{}');
+insert into pets (code, customer_code, name, species, breed, weight_kg, tags) values ('P006', 'C005', 'ปุยฝ้าย', 'dog', 'ปอม', 2.9, '{}');
+insert into pets (code, customer_code, name, species, breed, weight_kg, tags) values ('P007', 'C007', 'ขนมปัง', 'dog', 'บีเกิ้ล', 10.2, array['ชอบหนี']::text[]);
+insert into pets (code, customer_code, name, species, breed, weight_kg, tags) values ('P008', 'C006', 'ถั่วแดง', 'dog', 'พันธุ์ผสม', 7, '{}');
 insert into pet_vaccines (pet_code, vaccine, expires_on, photo, status, reviewed_by) values ('P001', 'รวม 5 โรค', '2027-06-30', 'p001-vac.jpg', 'approved', 'ST01');
 insert into pet_vaccines (pet_code, vaccine, expires_on, photo, status, reviewed_by) values ('P001', 'พิษสุนัขบ้า', '2027-06-30', 'p001-vac.jpg', 'approved', 'ST01');
 insert into pet_vaccines (pet_code, vaccine, expires_on, photo, status, reviewed_by) values ('P002', 'รวม 5 โรค', '2026-10-01', 'p002-vac.jpg', 'approved', 'ST01');

@@ -24,8 +24,8 @@ SHEETS = [
 DAYS = {'จ': 1, 'อ': 2, 'พ': 3, 'พฤ': 4, 'ศ': 5, 'ส': 6, 'อา': 7}
 TZ = '+07'
 # คอลัมน์ชนิดพิเศษ
-LIST_TEXT = {('units', 'amenities'), ('staff', 'businesses')}
-LIST_DAYS = {('pool_sessions', 'weekdays'), ('staff', 'work_days')}
+LIST_TEXT = {('units', 'amenities'), ('staff', 'businesses'), ('pets', 'tags')}
+LIST_DAYS = {('pool_sessions', 'weekdays'), ('staff', 'work_days'), ('businesses', 'closed_weekdays')}
 DATETIME = {'pdpa_at', 'hold_until', 'created_at', 'start_at', 'end_at', 'reviewed_at'}
 BOOL = {'active', 'need_vaccine', 'is_cover', 'is_groomer'}
 SYSTEM_ONLY = {('businesses', 'calendar_id')}   # ไม่ import (ระบบเติมตอนเชื่อมต่อ)
@@ -68,6 +68,9 @@ def q(v):
     if v is None: return 'null'
     if isinstance(v, bool): return 'true' if v else 'false'
     if isinstance(v, (int, float)): return repr(v)
+    if isinstance(v, tuple) and v[0] == 'json':
+        import json as _j
+        return "'" + _j.dumps(v[1], ensure_ascii=False).replace("'", "''") + "'::jsonb"
     if isinstance(v, list): return 'array[' + ','.join(q(x) for x in v) + ']' + ('::smallint[]' if v and isinstance(v[0], int) else '::text[]') if v else "'{}'"
     return "'" + str(v).replace("'", "''") + "'"
 
@@ -148,6 +151,16 @@ def main():
                 elif c in ('start', 'end', 'work_start', 'work_end') and v is not None: v = str(v)[:5]
                 rec[c] = v
             # ---- แปลงตามตาราง ----
+            if table == 'businesses':
+                # 7:100,3:50 → [{"days":7,"refund":100},...]
+                raw = rec.pop('cancel_rules', None)
+                rules = []
+                for part in as_list(raw):
+                    m = re.fullmatch(r'(\d+)\s*:\s*(\d+)', part)
+                    if not m: err(sheet, r, f'cancel_rules "{part}" ต้องเป็น วัน:คืน% เช่น 7:100'); continue
+                    rules.append({'days': int(m.group(1)), 'refund': int(m.group(2))})
+                rec['cancel_rules'] = ('json', sorted(rules, key=lambda x: -x['days']))
+                if rec.get('closed_weekdays') is None: rec['closed_weekdays'] = []
             if table == 'pool_sessions':
                 rec['start_time'] = rec.pop('start'); rec['end_time'] = rec.pop('end')
                 ref('units', sheet, r, 'unit_code', rec['unit_code'])

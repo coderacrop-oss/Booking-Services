@@ -8,7 +8,7 @@ import { baht, thDate } from './thaidate';
 
 type Tx = TransactionSql<{}>;
 export type Template = 'paid' | 'slip_rejected' | 'reminder' | 'new_booking' | 'slip_review' | 'cancelled' | 'groom_done' | 'confirm'
-  | 'vaccine_ok' | 'vaccine_rejected' | 'vaccine_review';
+  | 'vaccine_ok' | 'vaccine_rejected' | 'vaccine_review' | 'delete_request';
 type Channel = 'line_push' | 'email' | 'calendar';
 
 // ใส่คิว (ในธุรกรรมเดียวกับการเปลี่ยนสถานะ) · ส่งจริงทีหลัง ส่งพลาดลองใหม่ได้
@@ -21,7 +21,7 @@ export async function enqueue(tx: Tx, n: { order?: string; booking?: string; pet
   return r.id as number;
 }
 
-type Job = { id: number; order_code: string | null; booking_code: string | null; pet_code: string | null; channel: Channel; template: Template; payload: Record<string, unknown> };
+type Job = { id: number; order_code: string | null; booking_code: string | null; pet_code: string | null; customer_code: string | null; channel: Channel; template: Template; payload: Record<string, unknown> };
 
 // รายการจองที่เกี่ยวกับงานนี้
 async function bookingsOf(j: Job) {
@@ -44,7 +44,14 @@ async function shopName() {
   return r?.value ?? 'ร้าน';
 }
 
+// ร้านปิดข้อความบางแบบได้ที่ ตั้งค่า → ข้อความ LINE
+const MSG_KEY: Partial<Record<Template, string>> = {
+  paid: 'msg_paid', reminder: 'msg_reminder', slip_rejected: 'msg_slip_rejected', groom_done: 'msg_groom_done',
+  cancelled: 'msg_cancelled', vaccine_ok: 'msg_vaccine', vaccine_rejected: 'msg_vaccine',
+};
 async function lineFor(j: Job): Promise<{ to: string; text: string } | 'skip'> {
+  const key = MSG_KEY[j.template];
+  if (key) { const [o] = await sql`select value from settings where key = ${key}`; if (o?.value === 'off') return 'skip'; }
   const name = await shopName();
   if (j.pet_code) {
     const [p] = await sql`select p.name, c.line_user_id from pets p join customers c on c.code = p.customer_code where p.code = ${j.pet_code}`;
@@ -76,6 +83,10 @@ async function lineFor(j: Job): Promise<{ to: string; text: string } | 'skip'> {
 
 async function emailFor(j: Job): Promise<{ subject: string; text: string } | 'skip'> {
   const name = await shopName();
+  if (j.template === 'delete_request') {
+    const [c] = await sql`select display_name, phone from customers where code = ${j.customer_code}`;
+    return { subject: `[${name}] คำขอลบข้อมูล · ${c?.display_name ?? ''}`, text: `${c?.display_name ?? ''}${c?.phone ? ' · ' + c.phone : ''} (${j.customer_code}) ขอลบข้อมูลส่วนตัว\nเคลียร์การจองที่ค้างแล้วลบข้อมูล และแจ้งลูกค้าทางแชท` };
+  }
   if (j.template === 'vaccine_review') {
     const [p] = await sql`select p.name, c.display_name from pets p join customers c on c.code = p.customer_code where p.code = ${j.pet_code}`;
     return { subject: `[${name}] วัคซีนรอตรวจ · ${p?.name ?? ''}`, text: `${p?.display_name ?? ''} ส่งรูปวัคซีนของ${p?.name ?? 'น้อง'}\nเปิดหลังบ้าน → วัคซีน เพื่อตรวจ` };
@@ -127,7 +138,7 @@ export async function sendDue(limit = 20, onlyId?: number): Promise<{ sent: numb
                    where status = 'queued' and run_after <= now() and channel in ${sql(ch)}
                      and (${onlyId ?? null}::bigint is null or id = ${onlyId ?? null})
                    order by run_after limit ${limit} for update skip locked)
-    returning n.id, n.order_code, n.booking_code, n.pet_code, n.channel, n.template, n.payload`;
+    returning n.id, n.order_code, n.booking_code, n.pet_code, n.customer_code, n.channel, n.template, n.payload`;
   let sent = 0, failed = 0, skipped = 0;
   for (const j of jobs) {
     try {

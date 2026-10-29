@@ -21,10 +21,21 @@ export async function addPet(customer: string, p: { name?: string; species?: str
   return c as string;
 }
 
-export async function updateWeight(customer: string, pet: string, kg: number) {
-  if (!(kg > 0 && kg < 150)) throw new BookingError('bad_pet', 'น้ำหนักไม่ถูกต้อง');
-  const r = await sql`update pets set weight_kg = ${kg} where code = ${pet} and customer_code = ${customer}`;
-  if (!r.count) throw new BookingError('not_found', 'ไม่พบน้องตัวนี้');
+export const PET_TAGS = ['กลัวเสียงไดร์', 'แพ้ไก่', 'ดุกับหมาตัวอื่น', 'กลัวคนแปลกหน้า', 'กินยาประจำ', 'ชอบหนี'];
+
+// แก้น้ำหนัก · ข้อควรระวัง · บันทึก
+export async function updatePet(customer: string, pet: string, p: { weight_kg?: number; tags?: string[]; note?: string; name?: string; breed?: string }) {
+  const [cur] = await sql`select code from pets where code = ${pet} and customer_code = ${customer}`;
+  if (!cur) throw new BookingError('not_found', 'ไม่พบน้องตัวนี้');
+  if (p.weight_kg !== undefined && !(Number(p.weight_kg) > 0 && Number(p.weight_kg) < 150)) throw new BookingError('bad_pet', 'น้ำหนักไม่ถูกต้อง');
+  const tags = p.tags === undefined ? null : p.tags.map((t) => String(t).trim().slice(0, 30)).filter(Boolean).slice(0, 12);
+  await sql`update pets set
+      weight_kg = coalesce(${p.weight_kg ?? null}::numeric, weight_kg),
+      tags = coalesce(${tags}::text[], tags),
+      note = case when ${p.note === undefined} then note else ${(p.note || '').slice(0, 120) || null} end,
+      name = coalesce(nullif(${(p.name || '').trim().slice(0, 40)}, ''), name),
+      breed = case when ${p.breed === undefined} then breed else ${(p.breed || '').trim().slice(0, 40) || null} end
+    where code = ${pet}`;
 }
 
 // ลูกค้าส่งรูปสมุดวัคซีน → รอร้านตรวจ

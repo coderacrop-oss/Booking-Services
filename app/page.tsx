@@ -1,29 +1,34 @@
 import Link from 'next/link';
 import { getCatalog } from '@/lib/catalog';
 import { bizLook } from '@/lib/look';
+import { sql } from '@/lib/db';
+import { me } from '@/lib/me';
+import LiffGate from '@/components/LiffGate';
+import { CustScreen } from '@/components/cust/Gate';
 
 export const dynamic = 'force-dynamic';
 
-// หน้าแรก (ปกติลูกค้าเข้าจากริชเมนูตรงไปที่ /b/<ธุรกิจ> · หน้านี้ใช้เมื่อเปิดลิงก์รวม)
+// หน้าแรก "บริการ": สวัสดี + 4 ธุรกิจ
 export default async function Home() {
-  const cat = await getCatalog();
+  const [cat, m] = await Promise.all([getCatalog(), me()]);
+  const [c] = m.code ? await sql`select display_name from customers where code = ${m.code}` : [];
   return (
-    <main className="app">
-      <div className="topbar"><b>{cat.shop_name}</b></div>
-      <div className="body">
-        <div className="h1">จองบริการ</div>
-        <div className="sub">เลือกบริการที่ต้องการ</div>
-        {cat.businesses.map((b) => {
-          const L = bizLook(b.code, b.color, b.booking_type);
-          return (
-            <Link key={b.code} href={`/b/${b.code}`} className="biz" style={{ background: L.bg, color: L.fg }}>
-              <span className="ms">{L.icon}</span>
-              <span style={{ flex: 1 }}><b>{b.name}</b><small>{b.tagline}</small></span>
-              <span className="ms">chevron_right</span>
-            </Link>
-          );
-        })}
-      </div>
-    </main>
+    <LiffGate loggedIn={!!m.code}>
+      <CustScreen>
+        <div className="cap" style={{ fontSize: 15 }}>สวัสดี {c?.display_name ?? ''}</div>
+        <div className="title" style={{ marginTop: -6 }}>วันนี้ให้น้องทำอะไรดี</div>
+        <div className="tiles2">
+          {cat.businesses.map((b) => {
+            const L = bizLook(b.code, b.color, b.booking_type);
+            return (
+              <Link key={b.code} href={`/b/${b.code}`} className="btile" style={{ background: L.bg, color: L.fg, boxShadow: L.shadow }}>
+                <span className="ms">{L.icon}</span>
+                <span><b>{b.name}</b><small>{b.tagline}</small></span>
+              </Link>
+            );
+          })}
+        </div>
+      </CustScreen>
+    </LiffGate>
   );
 }
