@@ -2,7 +2,7 @@ import 'server-only';
 import { sql } from './db';
 import type { Business, CartItem, Pet, Quote, QuoteItem, QuoteLine } from './types';
 import { BOOK_AHEAD_MONTHS, lastBookable, maxNights } from './rules';
-import { addDays, baht, daysBetween, firstTime, fromMin, isoDow, thDate, thRange, toMin, todayTH } from './thaidate';
+import { addDays, baht, daysBetween, firstTime, fromMin, isoDow, thDate, thRange, thRangeDow, toMin, todayTH } from './thaidate';
 
 // เวลาไทย → timestamptz
 export const at = (date: string, time: string) => `${date} ${time}+07`;
@@ -225,7 +225,7 @@ export async function quote(customer: string, items: CartItem[]): Promise<Quote>
         lines.push({ label: `ค่าน้อง ${pets.length} ตัว × ${nights} คืน`, amount: Number(u.pet_fee) * pets.length * nights });
       }
       title = pets.length ? `${u.name} · ${pets.map((p) => p.name).join(', ')}` : u.name;
-      when = `${thRange(it.from, it.to)} · ${nights} คืน`;
+      when = `${thRangeDow(it.from, it.to)} · ${nights} คืน`;
       const t = stayTimes(b); start_at = at(it.from, t.in); end_at = at(it.to, t.out);
     }
 
@@ -270,7 +270,7 @@ export async function quote(customer: string, items: CartItem[]): Promise<Quote>
     if (b.balance_days && deposit < price) {
       // ยอดคงเหลือต้องจ่ายออนไลน์ก่อนวันใช้บริการ N วัน · จองใกล้กว่านั้นจ่ายเต็มตอนจอง
       const startD = start_at.slice(0, 10);
-      if (daysBetween(todayTH(), startD) < b.balance_days) deposit = price;
+      if (daysBetween(todayTH(), startD) <= b.balance_days) deposit = price;   // วันครบกำหนดต้องอยู่หลังวันนี้
       else { balance = price - deposit; balance_by = addDays(startD, -b.balance_days); }
     }
     out.push({ business: b.code, title, when, lines, price, deposit, balance, balance_by, start_at, end_at });

@@ -172,6 +172,7 @@ const PAY: [string, string, string][] = [
   ['promptpay_id', 'เลขพร้อมเพย์รับมัดจำ', 'เบอร์ 10 หลัก หรือเลข 13 หลัก'], ['account_name', 'ชื่อบัญชี (แสดงใต้ QR)', 'บจก. …'],
   ['liff_id', 'LIFF ID (จาก LINE Developers)', '2001234567-AbCdEfGh'],
   ['notify_email', 'อีเมลรับแจ้งจองใหม่ / สลิป (คั่น , ได้)', 'shop@example.com'], ['line_oa_id', 'LINE OA ID (ปุ่มแชทกับร้าน)', '@xxxx'], ['shop_phone', 'เบอร์ร้าน', '0xx-xxx-xxxx'],
+  ['shop_address', 'ที่อยู่ร้าน (หน้าติดต่อเจ้าหน้าที่)', 'เลขที่ ถนน ตำบล อำเภอ'], ['shop_map_url', 'ลิงก์ Google Maps', 'https://maps.app.goo.gl/…'],
 ];
 export function PaySettings({ values }: { values: Record<string, string> }) {
   const [v, setV] = useState(values);

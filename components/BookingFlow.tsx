@@ -72,7 +72,8 @@ export default function BookingFlow({ cat, pets, loggedIn, today, initial, credi
   const word = forPeople ? 'หลัง' : 'ห้อง';
   const inWord = forPeople ? 'เข้าพัก' : 'เช็กอิน', outWord = forPeople ? 'เช็กเอาต์' : 'รับกลับ';
   const [guests, setGuests] = useState(2);
-  const [sel, setSel] = useState<string[]>([]);            // น้องที่เลือก
+  // น้องที่เลือก · Grooming เลือกตัวแรกไว้ให้ (1 คิวต่อ 1 ตัว)
+  const [sel, setSel] = useState<string[]>(b.booking_type === 'slot' && pets[0] ? [pets[0].code] : []);
   const [unit, setUnit] = useState<string | null>(null);
   const [date, setDate] = useState<string | null>(b.booking_type === 'stay' ? null : start);
   const [session, setSession] = useState<string | null>(null);
@@ -407,7 +408,7 @@ export default function BookingFlow({ cat, pets, loggedIn, today, initial, credi
   if (step === 'addons') content = (
     <>
       <div className="h1">เพิ่มบริการเสริม</div>
-      <div className="sub">ไม่เลือกก็ได้</div>
+      <div className="sub">ไม่เลือกก็ได้ · ค่าสภาพขนช่างจะแจ้งก่อนเริ่มทำ</div>
       {addonList.map((a) => (
         <button key={a.code} className={'card' + (addons.includes(a.code) ? ' on' : '')} onClick={() => { setAddons((x) => x.includes(a.code) ? x.filter((y) => y !== a.code) : [...x, a.code]); setSlot(null); setTime(null); }}>
           <span className="t"><b>{a.name}</b></span>
@@ -459,12 +460,16 @@ export default function BookingFlow({ cat, pets, loggedIn, today, initial, credi
     <>
       {q.loading && <><div className="skeleton" /><div className="skeleton" style={{ height: 140 }} /></>}
       {q.error && <div className="err">{q.error}</div>}
-      {q.data?.items.map((it, k) => (
+      {q.data?.items.slice(0, 1).map((it, k) => (
         <div key={k} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
           <div className="h1" style={{ fontSize: 20 }}>{it.title}</div>
           <div className="sub">{it.when}</div>
         </div>
       ))}
+      {loggedIn && cart && (
+        <TripAddons offers={offers} pets={chosenPets} value={extras} onChange={setExtras}
+          main={{ kind: b.booking_type, from: from ?? date ?? today, to: to ?? date ?? today, date: date ?? from ?? today, nights, isVilla: forPeople }} />
+      )}
       {q.data && (
         <div className="bill">
           {q.data.items.flatMap((it) => it.lines).map((l, k) => <div key={k} className="l"><span>{l.label}{l.note ? ` (${l.note})` : ''}</span><span className="num">{baht(l.amount)}</span></div>)}
@@ -486,10 +491,6 @@ export default function BookingFlow({ cat, pets, loggedIn, today, initial, credi
             </div>
           ))}
         </>
-      )}
-      {loggedIn && cart && (
-        <TripAddons offers={offers} pets={chosenPets} value={extras} onChange={setExtras}
-          main={{ kind: b.booking_type, from: from ?? date ?? today, to: to ?? date ?? today, date: date ?? from ?? today, nights, isVilla: forPeople }} />
       )}
       {credit > 0 && q.data && (
         <button className={'card' + (useCredit ? ' on' : '')} onClick={() => setUseCredit(!useCredit)}>

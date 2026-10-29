@@ -67,6 +67,20 @@ export default function PayBox({ order, qr, account, shop }: { order: Order; qr:
   const waiting = order.status === 'pending_review';
   const paid = order.status === 'paid';
 
+  // ส่งสลิปแล้ว → หน้าสำเร็จ พาไปดูการจอง
+  if (waiting || (paid && !bal && order.last_payment?.status === 'pending')) return (
+    <main className="app">
+      <TopBar title="ชำระเงิน" step={order.code} onBack={() => router.push('/me')} />
+      <div className="body" style={{ alignItems: 'center', justifyContent: 'center', textAlign: 'center', gap: 12, minHeight: '70vh' }}>
+        <span className="empty-ic" style={{ width: 64, height: 64, borderRadius: 32, display: 'grid', placeItems: 'center', background: 'var(--amber-bg, #FDF5DC)' }}>
+          <span className="ms" style={{ fontSize: 32, color: '#8A5A00' }}>hourglass_top</span></span>
+        <b style={{ fontSize: 20, fontWeight: 800 }}>ส่งสลิปแล้ว</b>
+        <div className="sub" style={{ maxWidth: 260 }}>ร้านกำลังตรวจ · ผลจะแจ้งในแชท LINE</div>
+        <a className="btn" href={`/me/b/${order.code}`} style={{ minWidth: 220 }}>ดูการจองของฉัน</a>
+      </div>
+    </main>
+  );
+
   return (
     <main className="app">
       <TopBar title="ชำระเงิน" step={order.code} onBack={() => router.push('/me')} />

@@ -13,6 +13,17 @@ type SlotAv = { minutes: number; closed: boolean; grid: Grid };
 type SessAv = { code: string; start: string; end: string; left: number; free: boolean; reason: string | null };
 type UnitAv = { code: string; free: boolean; reason: string | null };
 
+// วันที่เลือกไว้ให้ก่อน: Grooming = วันออก/วันที่จอง · สระ = วันที่สองของทริป · Pet hotel = ทั้งทริป
+const tripDays = (main: Main) => {
+  if (main.kind !== 'stay') return [main.date];
+  const out: string[] = [];
+  for (let d = main.from; d <= main.to; d = addDays(d, 1)) out.push(d);
+  return out;
+};
+const defaultDay = (type: string, main: Main) => type === 'slot' ? (main.kind === 'stay' ? main.to : main.date)
+  : main.kind === 'stay' ? (tripDays(main)[1] ?? main.from) : main.date;
+const SUB: Record<string, string> = { slot: 'เลือกน้อง บริการ เวลา และช่าง', session: 'เลือกน้อง วัน และรอบ', stay: 'เลือกน้องและห้อง' };
+
 const j = async <T,>(url: string, body?: unknown): Promise<T> => {
   const r = await fetch(url, body ? { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) } : undefined);
   const x = await r.json().catch(() => ({}));
@@ -41,16 +52,18 @@ function OfferCard({ k, offer, pets, main, added, onSave, onRemove }:
   { k: string; offer: CrossSell; pets: Pet[]; main: Main; added: Addon | null; onSave: (a: Addon) => void; onRemove: () => void }) {
   const [open, setOpen] = useState(false);
   const L = bizLook(offer.offer_business, offer.offer_color ?? null, offer.offer_type ?? '');
-  const head = (
+  const type = offer.offer_type;
+  const whenLine = type === 'stay' ? `${thDate(main.from)} – ${thDate(main.to)} · ${main.nights} คืน` : thDate(defaultDay(type, main));
+  const head = (sub: string) => (
     <span className="t">
       <span className="tag" style={{ background: L.bg, color: L.fg, alignSelf: 'flex-start' }}><span className="ms" style={{ fontSize: 15 }}>{L.icon}</span>{offer.offer_name}</span>
       <b style={{ fontSize: 15 }}>{offer.title}</b>
-      {offer.condition && <small>{offer.condition}</small>}
+      <small>{sub}</small>
     </span>
   );
   if (added && !open) return (
     <div className="card" style={{ padding: 12, flexDirection: 'column', alignItems: 'stretch', gap: 8 }}>
-      <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>{head}<b className="num">{baht(added.price)}</b></div>
+      <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>{head(whenLine)}<b className="num">{baht(added.price)}</b></div>
       <div className="sub" style={{ fontSize: 13 }}>{added.title}<br />{added.when}</div>
       <div style={{ display: 'flex', gap: 8 }}>
         <button className="btn ghost" style={{ height: 36, padding: '0 14px', fontSize: 14 }} onClick={() => setOpen(true)}>แก้</button>
@@ -60,13 +73,14 @@ function OfferCard({ k, offer, pets, main, added, onSave, onRemove }:
   );
   if (!open) return (
     <div className="card" style={{ padding: 12 }}>
-      {head}
+      {head(whenLine)}
       <button className="btn ghost" style={{ height: 36, padding: '0 14px', fontSize: 14 }} onClick={() => setOpen(true)}>+ เพิ่ม</button>
     </div>
   );
   return (
     <div className="card on" style={{ padding: 12, flexDirection: 'column', alignItems: 'stretch', gap: 10 }}>
-      <div style={{ display: 'flex', gap: 10 }}>{head}</div>
+      <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>{head(SUB[type] ?? '')}
+        <button className="btn ghost" style={{ height: 36, padding: '0 14px', fontSize: 14, flex: 'none' }} onClick={() => setOpen(false)}>ปิด</button></div>
       <AddonForm k={k} offer={offer} pets={pets} main={main} initial={added}
         onDone={(a) => { onSave(a); setOpen(false); }} onCancel={() => setOpen(false)} />
     </div>
@@ -81,20 +95,15 @@ function AddonForm({ k, offer, pets, main, initial, onDone, onCancel }:
   const [busy, setBusy] = useState(false);
   const [sel, setSel] = useState<string[]>(() => pets.map((p) => p.code));
   // วันในทริป
-  const days = useMemo(() => {
-    if (main.kind !== 'stay') return [main.date];
-    const out: string[] = [];
-    for (let d = main.from; d <= main.to; d = addDays(d, 1)) out.push(d);
-    return out;
-  }, [main]);
-  const defDay = type === 'slot' ? (main.kind === 'stay' ? main.to : main.date) : main.kind === 'stay' ? (days[1] ?? days[0]) : main.date;
+  const days = useMemo(() => tripDays(main), [main]);
+  const defDay = defaultDay(type, main);
   const [date, setDate] = useState(defDay);
   const [service, setService] = useState<string | null>(offer.offer_item);
   const [time, setTime] = useState<string | null>(null);
   const [staff, setStaff] = useState<{ staff: string; staff_name: string } | null>(null);
   const [session, setSession] = useState<string | null>(null);
   const [unit, setUnit] = useState<string | null>(null);
-  const [month, setMonth] = useState<{ days: Record<string, { closed: boolean; reason: string | null }>; slots?: Record<string, { free: number; reason: string | null }>; sessions?: Record<string, { open: number; later: number; free: number }> } | null>(null);
+  const [month, setMonth] = useState<{ days: Record<string, { closed: boolean; reason: string | null }>; slots?: Record<string, { free: number; staff?: number; reason: string | null }>; sessions?: Record<string, { open: number; later: number; free: number }> } | null>(null);
   const [slots, setSlots] = useState<SlotAv | null>(null);
   const [sess, setSess] = useState<SessAv[] | null>(null);
   const [units, setUnits] = useState<UnitAv[] | null>(null);
@@ -142,6 +151,10 @@ function AddonForm({ k, offer, pets, main, initial, onDone, onCancel }:
     if (type === 'session') { const s = month?.sessions?.[d]; if (!s || !s.open) return 'ไม่มีรอบวันนี้'; if (!s.free) return 'รอบเต็มทุกรอบ'; }
     return null;
   };
+  const freeOn = (d: string) => {
+    const n = type === 'slot' ? month?.slots?.[d]?.staff : type === 'session' ? month?.sessions?.[d]?.free : undefined;
+    return n === undefined ? '' : `ว่าง ${n}`;
+  };
   const togglePet = (c: string) => { setSel((x) => (x.includes(c) ? x.filter((y) => y !== c) : [...x, c])); setSession(null); setUnit(null); setTime(null); setStaff(null); };
   const mains = cat?.services.filter((s) => s.kind === 'main') ?? [];
 
@@ -182,13 +195,13 @@ function AddonForm({ k, offer, pets, main, initial, onDone, onCancel }:
   return (
     <>
       <div className="cap">น้อง</div>
-      <div className="chips">{pets.map((p) => <button key={p.code} className={'chip' + (sel.includes(p.code) ? ' on' : '')} onClick={() => togglePet(p.code)}><b>{p.name}</b><small>{p.weight_kg} กก.</small></button>)}</div>
+      <div className="chips">{pets.map((p) => <button key={p.code} className={'chip' + (sel.includes(p.code) ? ' on' : '')} onClick={() => togglePet(p.code)}><b>{p.name}</b><small>{cat?.tiers.find((t) => t.code === p.tier_code)?.label ?? `${p.weight_kg} กก.`}</small></button>)}</div>
 
       {type === 'slot' && <>
         <div className="cap">บริการ</div>
         <div className="chips">{mains.map((s) => {
           const pr = s.price_mode === 'flat' ? Number(s.price) : chosen.reduce((a, p) => a + Number(s.prices.find((x) => x.tier_code === p.tier_code)?.price ?? 0), 0);
-          return <button key={s.code} className={'chip' + (service === s.code ? ' on' : '')} onClick={() => { setService(s.code); setTime(null); setStaff(null); }}><b>{s.name}</b><small>{baht(pr)}</small></button>;
+          return <button key={s.code} className={'chip' + (service === s.code ? ' on' : '')} onClick={() => { if (service === s.code) return; setService(s.code); setTime(null); setStaff(null); }}><b>{s.name}</b><small>{baht(pr)}</small></button>;
         })}</div>
       </>}
 
@@ -197,7 +210,7 @@ function AddonForm({ k, offer, pets, main, initial, onDone, onCancel }:
         <div className="chips">{days.map((d) => { const off = dayOff(d); return (
           <button key={d} className={'chip' + (date === d ? ' on' : '')} style={off ? { opacity: 0.4 } : undefined}
             onClick={() => (off ? setErr(off) : (setDate(d), setTime(null), setStaff(null), setSession(null)))}>
-            <b>{thDate(d, false)}</b><small>{thDate(d).split(' ')[2]}</small></button>); })}</div>
+            <b>{thDate(d)}</b><small>{off ? (month?.days?.[d]?.closed ? 'ปิด' : 'เต็ม') : freeOn(d)}</small></button>); })}</div>
       </>}
 
       {type === 'slot' && service && <>
@@ -207,7 +220,7 @@ function AddonForm({ k, offer, pets, main, initial, onDone, onCancel }:
           <button key={g.start} className={'chip' + (time === g.start ? ' on' : '') + (g.free.length ? '' : ' full')} disabled={!g.free.length}
             onClick={() => { setTime(g.start); setStaff(g.free.length === 1 ? g.free[0] : null); }}>
             <b className="num">{g.start}</b><small>{g.free.length ? `ว่าง ${g.free.length} ช่าง` : g.pet_busy ? 'น้องมีคิวแล้ว' : 'เต็ม'}</small></button>))}</div>
-        <div className="cap">ช่างที่ว่าง{time ? ` · ${time}` : ''}</div>
+        <div className="cap">ช่าง{time ? ` · ว่างเวลา ${time}` : ''}</div>
         {!time && <div className="sub" style={{ color: 'var(--red-ink)' }}>เลือกเวลาก่อน</div>}
         {time && <div className="chips">{(slots?.grid.find((g) => g.start === time)?.free ?? []).map((f) => (
           <button key={f.staff} className={'chip' + (staff?.staff === f.staff ? ' on' : '')} onClick={() => setStaff(f)}><b>พี่{f.staff_name}</b></button>))}</div>}
@@ -236,7 +249,7 @@ function AddonForm({ k, offer, pets, main, initial, onDone, onCancel }:
       {err && <div className="err">{err}</div>}
       <div style={{ display: 'flex', gap: 8 }}>
         <button className="btn" style={{ flex: 1 }} disabled={busy} onClick={save}>{busy ? 'รอสักครู่…' : initial ? 'บันทึก' : 'ใส่ในทริป'}</button>
-        <button className="btn ghost" onClick={onCancel}>ยกเลิก</button>
+        {initial && <button className="btn ghost" onClick={onCancel}>ยกเลิก</button>}
       </div>
     </>
   );

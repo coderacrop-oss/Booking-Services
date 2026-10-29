@@ -4,9 +4,9 @@ import { bizLook } from '@/lib/look';
 import { sql } from '@/lib/db';
 import { me } from '@/lib/me';
 import LiffGate from '@/components/LiffGate';
+import BookingCard from '@/components/cust/BookingCard';
 import { CustScreen } from '@/components/cust/Gate';
 import { myOrders } from '@/lib/orders';
-import { ORDER_ST, Pill } from '@/lib/status';
 
 export const dynamic = 'force-dynamic';
 
@@ -22,7 +22,6 @@ export default async function Home() {
   const now = new Date(Date.now() + 7 * 3600000).toISOString().slice(0, 16).replace('T', ' ');
   const upcoming = m.code ? (await myOrders(m.code)).filter((o) => ['holding', 'pending_review', 'paid'].includes(o.status)
     && o.items.some((i) => !['cancelled', 'expired', 'done', 'no_show'].includes(i.status) && i.e >= now)).slice(0, 5) : [];
-  const look = (code: string) => { const b = cat.businesses.find((x) => x.code === code); return bizLook(code, b?.color ?? null, b?.booking_type ?? ''); };
   return (
     <LiffGate loggedIn={!!m.code}>
       <CustScreen>
@@ -43,20 +42,7 @@ export default async function Home() {
           })}
         </div>
         {upcoming.length > 0 && <div className="section" style={{ marginTop: 14, color: 'var(--ink-2)' }}>การจองของฉัน</div>}
-        {upcoming.map((o) => {
-          const i = o.items.find((x) => !['cancelled', 'expired'].includes(x.status)) ?? o.items[0];
-          const L = look(i.business_code);
-          return (
-            <Link key={o.code} href={`/me/b/${o.code}`} className="mybk">
-              <span className="t">
-                <span className="biztag" style={{ background: L.bg, color: L.fg, boxShadow: L.shadow }}>{i.biz}{o.items.length > 1 ? ` +${o.items.length - 1}` : ''}</span>
-                <b>{i.item}{i.pets ? ` · ${i.pets}` : ''}</b>
-                <Pill s={ORDER_ST[o.status] ?? [o.status, '#eee', '#111']} />
-              </span>
-              <span className="ms go">chevron_right</span>
-            </Link>
-          );
-        })}
+        {upcoming.map((o) => <BookingCard key={o.code} o={o as never} biz={cat.businesses as never} />)}
       </CustScreen>
     </LiffGate>
   );
