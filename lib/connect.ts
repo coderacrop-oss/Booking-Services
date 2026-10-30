@@ -17,7 +17,7 @@ export async function services(): Promise<Svc[]> {
       without: 'ส่งรหัสเข้าแชทแล้วไม่มีการ์ดตอบ · ตั้ง Webhook URL เป็น <โดเมน>/api/line/webhook' },
     { name: 'LINE ล็อกอิน (LIFF)', what: 'ลูกค้าเปิดหน้าจองใน LINE แล้วล็อกอินอัตโนมัติ', env: [],
       without: 'เปิดหน้าจองนอก LINE ได้แต่จองไม่ได้ (ยกเว้นโหมดเดโม่)' },
-    { name: 'อีเมลแจ้งร้าน (Resend)', what: 'อีเมลแจ้งจองใหม่ สลิปรอตรวจ คำขอลบข้อมูล', env: ['EMAIL_API_KEY', 'EMAIL_FROM'],
+    { name: 'อีเมล (Apps Script หรือ Resend)', what: 'แจ้งร้าน: จองใหม่ สลิปรอตรวจ คำขอลบข้อมูล · สำเนาถึงลูกค้าที่กรอกอีเมล', env: ['EMAIL_RELAY_URL', 'EMAIL_RELAY_KEY'],
       without: 'ร้านต้องเปิดหลังบ้านดูเอง' },
     { name: 'Google Calendar', what: 'ลงนัดในปฏิทินของแต่ละธุรกิจ', env: ['GOOGLE_SERVICE_ACCOUNT_JSON'],
       without: 'ไม่ลงปฏิทิน (ดูในหลังบ้านแทน)' },
@@ -29,6 +29,7 @@ export async function services(): Promise<Svc[]> {
   return list.map((s) => {
     let missing = s.env.filter((k) => !has(k));
     if (s.name.startsWith('LINE ล็อกอิน') && !has('NEXT_PUBLIC_LIFF_ID') && !liff?.value) missing = ['LIFF ID (ใส่ในหน้ารับเงินและข้อมูลร้าน)'];
+    if (s.name.startsWith('อีเมล') && has('EMAIL_API_KEY') && has('EMAIL_FROM')) missing = [];
     if (s.name === 'Google Calendar' && !missing.length && !cals[0].n) missing = ['รหัสปฏิทินของธุรกิจ (businesses.calendar_id)'];
     return { ...s, ready: !missing.length, missing };
   });
